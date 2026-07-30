@@ -45,14 +45,7 @@ class SpeakersPage extends StatelessWidget {
               action: onRefresh,
             );
           }
-          final items = snapshot.data ?? const [];
-          if (items.isEmpty) {
-            return _Message(
-              icon: Icons.speaker_group_outlined,
-              text: '没有找到音箱，请先在 MIoT 插件中添加账号并启用设备。',
-              action: onRefresh,
-            );
-          }
+          final items = [SpeakerDevice.local, ...?snapshot.data];
           return RefreshIndicator(
             onRefresh: onRefresh,
             child: ListView.separated(
@@ -70,18 +63,24 @@ class SpeakersPage extends StatelessWidget {
                   child: ListTile(
                     contentPadding: const EdgeInsets.all(14),
                     leading: CircleAvatar(
-                      child: Icon(selected ? Icons.speaker : Icons.speaker_outlined),
+                      child: Icon(
+                        device.isLocal
+                            ? (selected ? Icons.phone_android : Icons.phone_android_outlined)
+                            : (selected ? Icons.speaker : Icons.speaker_outlined),
+                      ),
                     ),
                     title: Text(device.name),
                     subtitle: Text([
-                      device.model ?? '智能音箱',
-                      if (selected) '默认输出设备',
+                      device.isLocal ? '手机扬声器 / 蓝牙设备' : (device.model ?? '智能音箱'),
+                      if (selected) device.isLocal ? '当前播放设备' : '默认输出设备',
                     ].join(' · ')),
                     trailing: selected
                         ? const Icon(Icons.check_circle)
                         : const Icon(Icons.radio_button_unchecked),
                     onTap: () => onSelected(device),
-                    onLongPress: () => _showDeviceDetail(context, device, selected),
+                    onLongPress: () => device.isLocal
+                        ? _showLocalDetail(context, selected)
+                        : _showDeviceDetail(context, device, selected),
                   ),
                 );
               },
@@ -109,6 +108,41 @@ class SpeakersPage extends StatelessWidget {
           onSelected(device);
           Navigator.pop(sheetContext);
         },
+      ),
+    );
+  }
+
+  void _showLocalDetail(BuildContext context, bool selected) {
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: CircleAvatar(child: Icon(Icons.phone_android)),
+                title: Text('本机播放'),
+                subtitle: Text('直接使用当前设备扬声器或已连接的蓝牙设备'),
+              ),
+              const SizedBox(height: 12),
+              FilledButton.icon(
+                onPressed: selected
+                    ? null
+                    : () {
+                        onSelected(SpeakerDevice.local);
+                        Navigator.pop(sheetContext);
+                      },
+                icon: const Icon(Icons.check_circle_outline),
+                label: Text(selected ? '当前播放设备' : '使用本机播放'),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
