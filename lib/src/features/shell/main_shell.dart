@@ -576,16 +576,11 @@ class _HomePage extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 20),
-                Slider(
-                  value: position.clamp(0, duration <= 0 ? 1 : duration),
-                  min: 0,
-                  max: duration <= 0 ? 1 : duration,
-                  onChanged: selectedDevice == null || busy || duration <= 0
-                      ? null
-                      : (_) {},
-                  onChangeEnd: selectedDevice == null || busy || duration <= 0
-                      ? null
-                      : onSeek,
+                _SeekSlider(
+                  position: position,
+                  duration: duration,
+                  enabled: selectedDevice != null && !busy && duration > 0,
+                  onSeek: onSeek,
                 ),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -698,6 +693,55 @@ class _HomePage extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _SeekSlider extends StatefulWidget {
+  const _SeekSlider({
+    required this.position,
+    required this.duration,
+    required this.enabled,
+    required this.onSeek,
+  });
+
+  final double position;
+  final double duration;
+  final bool enabled;
+  final ValueChanged<double> onSeek;
+
+  @override
+  State<_SeekSlider> createState() => _SeekSliderState();
+}
+
+class _SeekSliderState extends State<_SeekSlider> {
+  double? _dragValue;
+
+  @override
+  void didUpdateWidget(covariant _SeekSlider oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (_dragValue == null && oldWidget.position != widget.position) {
+      _dragValue = null;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final max = widget.duration <= 0 ? 1.0 : widget.duration;
+    final value = (_dragValue ?? widget.position).clamp(0, max).toDouble();
+    return Slider(
+      value: value,
+      min: 0,
+      max: max,
+      onChanged: widget.enabled
+          ? (next) => setState(() => _dragValue = next)
+          : null,
+      onChangeEnd: widget.enabled
+          ? (next) {
+              setState(() => _dragValue = null);
+              widget.onSeek(next);
+            }
+          : null,
     );
   }
 }
