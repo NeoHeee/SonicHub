@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
+import '../../core/config_store.dart';
 import '../../core/models.dart';
 import '../audiobookshelf/audiobookshelf_page.dart';
 import '../../core/server_config.dart';
@@ -23,25 +25,50 @@ class _MainShellState extends State<MainShell> {
   DeviceStatus? _status;
   String? _diagnostic;
   bool _busy = false;
+  String? _externalTitle;
+  String? _externalSubtitle;
+  String? _externalSource;
+  final _configStore = ConfigStore();
 
   @override
   void initState() {
     super.initState();
-    _devices = widget.api.getDevices();
+    _devices = _loadDevices();
+  }
+
+  Future<List<SpeakerDevice>> _loadDevices() async {
+    final devices = await widget.api.getDevices();
+    final saved = await _configStore.loadSelectedDevice();
+    if (devices.isNotEmpty && _selectedDevice == null) {
+      final selected = saved == null
+          ? devices.first
+          : devices.firstWhere(
+              (item) =>
+                  item.id == saved.deviceId &&
+                  item.accountId == saved.accountId,
+              orElse: () => devices.first,
+            );
+      if (mounted) setState(() => _selectedDevice = selected);
+      await _refreshStatus();
+    }
+    return devices;
   }
 
   Future<void> _refreshDevices() async {
-    final future = widget.api.getDevices();
+    final future = _loadDevices();
     setState(() => _devices = future);
     try {
       final devices = await future;
       if (!mounted) return;
       final selectedId = _selectedDevice?.id;
+      final selectedAccountId = _selectedDevice?.accountId;
       setState(() {
         _selectedDevice = devices.isEmpty
             ? null
             : devices.firstWhere(
-                (item) => item.id == selectedId,
+                (item) =>
+                    item.id == selectedId &&
+                    item.accountId == selectedAccountId,
                 orElse: () => devices.first,
               );
       });
@@ -53,7 +80,13 @@ class _MainShellState extends State<MainShell> {
     setState(() {
       _selectedDevice = device;
       _status = null;
+      _externalTitle = null;
+      _externalSubtitle = null;
+      _externalSource = null;
     });
+    if (device != null) {
+      await _configStore.saveSelectedDevice(device.accountId, device.id);
+    }
     await _refreshStatus();
   }
 
@@ -93,6 +126,52 @@ class _MainShellState extends State<MainShell> {
     }
   }
 
+  Future<void> _setVolume(double value) async {
+    await _control((device) => widget.api.setVolume(device, value.round()));
+  }
+
+  void _showAudiobook(AbsBook book, String? chapterTitle) {
+    setState(() {
+      _externalTitle = book.title;
+      _externalSubtitle = [
+        if (chapterTitle?.trim().isNotEmpty == true) chapterTitle!.trim(),
+        if (book.subtitle.trim().isNotEmpty) book.subtitle.trim(),
+      ].join(' · ');
+      _externalSource = 'Audiobookshelf';
+    });
+    _refreshStatus();
+  }
+
+  void _clearExternalPlayback() {
+    setState(() {
+      _externalTitle = null;
+      _externalSubtitle = null;
+      _externalSource = null;
+    });
+    _refreshStatus();
+  }
+
+  Future<void> _logout() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('更换账号或服务器？'),
+        content: const Text('将返回连接页面，已保存的配置不会删除。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('继续'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true && mounted) Navigator.of(context).pop();
+  }
+
   Future<void> _diagnose() async {
     setState(() {
       _busy = true;
@@ -129,6 +208,11 @@ class _MainShellState extends State<MainShell> {
         onPrevious: () => _control(widget.api.previous),
         onToggle: () => _control(widget.api.togglePlayback),
         onNext: () => _control(widget.api.next),
+        onVolumeChanged: _setVolume,
+        externalTitle: _externalTitle,
+        externalSubtitle: _externalSubtitle,
+        externalSource: _externalSource,
+        onOpenDevices: () => setState(() => _index = 3),
         onPlayUrl: _selectedDevice == null
             ? null
             : () => showModalBottomSheet<void>(
@@ -138,29 +222,44 @@ class _MainShellState extends State<MainShell> {
                     api: widget.api,
                     device: _selectedDevice!,
                   ),
-                ).then((_) => _refreshStatus()),
+                ).then((_) => _clearExternalPlayback()),
       ),
       _LibraryPage(
         api: widget.api,
         device: _selectedDevice,
-        onPlayed: _refreshStatus,
+        onPlayed: _clearExternalPlayback,
       ),
       AudiobookshelfPage(
         songloftApi: widget.api,
         device: _selectedDevice,
-        onPlayed: _refreshStatus,
+        onPlayed: _showAudiobook,
       ),
-      SpeakersPage(api: widget.api),
+      SpeakersPage(
+        devices: _devices,
+        selectedDevice: _selectedDevice,
+        onSelected: _selectDevice,
+        onRefresh: _refreshDevices,
+      ),
       _SettingsPage(
         config: widget.config,
         busy: _busy,
         diagnostic: _diagnostic,
         onDiagnose: _diagnose,
-        onReconnect: () => Navigator.of(context).pop(),
+        onReconnect: _logout,
       ),
     ];
 
-    return Scaffold(
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
+        if (_index != 0) {
+          setState(() => _index = 0);
+        } else {
+          SystemNavigator.pop();
+        }
+      },
+      child: Scaffold(
       body: IndexedStack(index: _index, children: pages),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _index,
@@ -189,6 +288,7 @@ class _MainShellState extends State<MainShell> {
           ),
         ],
       ),
+    ),
     );
   }
 }
@@ -206,6 +306,11 @@ class _HomePage extends StatelessWidget {
     required this.onPrevious,
     required this.onToggle,
     required this.onNext,
+    required this.onVolumeChanged,
+    required this.externalTitle,
+    required this.externalSubtitle,
+    required this.externalSource,
+    required this.onOpenDevices,
     required this.onPlayUrl,
   });
 
@@ -220,11 +325,30 @@ class _HomePage extends StatelessWidget {
   final VoidCallback onPrevious;
   final VoidCallback onToggle;
   final VoidCallback onNext;
+  final ValueChanged<double> onVolumeChanged;
+  final String? externalTitle;
+  final String? externalSubtitle;
+  final String? externalSource;
+  final VoidCallback onOpenDevices;
   final VoidCallback? onPlayUrl;
+
+  String _formatTime(double seconds) {
+    final value = seconds.round().clamp(0, 999999);
+    final minutes = value ~/ 60;
+    final remaining = value % 60;
+    return '$minutes:${remaining.toString().padLeft(2, '0')}';
+  }
 
   @override
   Widget build(BuildContext context) {
     final song = status?.currentSong;
+    final title = externalTitle ?? song?.title ?? '暂无播放内容';
+    final subtitle = externalSubtitle ??
+        (song?.subtitle.isNotEmpty == true
+            ? song!.subtitle
+            : (status?.playlistName.isNotEmpty == true
+                ? status!.playlistName
+                : '选择歌曲或有声书开始播放'));
     return Scaffold(
       appBar: AppBar(title: const Text('音枢 SonicHub')),
       body: RefreshIndicator(
@@ -276,7 +400,10 @@ class _HomePage extends StatelessWidget {
                   );
                 }
                 return Card(
-                  child: Padding(
+                  child: InkWell(
+                    onTap: onOpenDevices,
+                    borderRadius: BorderRadius.circular(12),
+                    child: Padding(
                     padding: const EdgeInsets.all(16),
                     child: DropdownButtonFormField<SpeakerDevice>(
                       key: ValueKey(current.id),
@@ -295,6 +422,7 @@ class _HomePage extends StatelessWidget {
                       onChanged: onDeviceChanged,
                     ),
                   ),
+                  ),
                 );
               },
             ),
@@ -306,16 +434,23 @@ class _HomePage extends StatelessWidget {
                   children: [
                     ListTile(
                       contentPadding: EdgeInsets.zero,
-                      leading: const CircleAvatar(
-                        child: Icon(Icons.music_note),
+                      leading: CircleAvatar(
+                        radius: 28,
+                        child: Icon(externalSource == null
+                            ? Icons.music_note
+                            : Icons.auto_stories),
                       ),
-                      title: Text(song?.title ?? '暂无播放内容'),
+                      title: Text(
+                        title,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
                       subtitle: Text(
-                        song?.subtitle.isNotEmpty == true
-                            ? song!.subtitle
-                            : (status?.playlistName.isNotEmpty == true
-                                ? status!.playlistName
-                                : '选择歌单中的歌曲开始播放'),
+                        [if (externalSource != null) externalSource!, subtitle]
+                            .join(' · '),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
                       ),
                       trailing: IconButton(
                         onPressed: selectedDevice == null || busy
@@ -324,12 +459,21 @@ class _HomePage extends StatelessWidget {
                         icon: const Icon(Icons.refresh),
                       ),
                     ),
-                    if (status != null && status!.duration > 0)
+                    if (status != null && status!.duration > 0) ...[
                       LinearProgressIndicator(
                         value: (status!.position / status!.duration)
                             .clamp(0.0, 1.0),
                       ),
-                    const SizedBox(height: 8),
+                      const SizedBox(height: 4),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(_formatTime(status!.position)),
+                          Text(_formatTime(status!.duration)),
+                        ],
+                      ),
+                    ],
+                    const SizedBox(height: 12),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                       children: [
@@ -357,9 +501,21 @@ class _HomePage extends StatelessWidget {
                       ],
                     ),
                     if (status?.volume != null)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 8),
-                        child: Text('音量 ${status!.volume}%'),
+                      Row(
+                        children: [
+                          const Icon(Icons.volume_down),
+                          Expanded(
+                            child: Slider(
+                              value: status!.volume!.toDouble().clamp(0, 100),
+                              min: 0,
+                              max: 100,
+                              divisions: 20,
+                              label: '${status!.volume}%',
+                              onChanged: busy ? null : onVolumeChanged,
+                            ),
+                          ),
+                          Text('${status!.volume}%'),
+                        ],
                       ),
                     if (busy) const LinearProgressIndicator(),
                   ],
@@ -673,7 +829,7 @@ class _SettingsPage extends StatelessWidget {
           OutlinedButton.icon(
             onPressed: onReconnect,
             icon: const Icon(Icons.swap_horiz),
-            label: const Text('更换服务器'),
+            label: const Text('更换账号或服务器'),
           ),
           const SizedBox(height: 24),
           const ListTile(
