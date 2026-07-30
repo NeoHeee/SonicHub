@@ -13,6 +13,7 @@ class AudiobookshelfPage extends StatefulWidget {
   final void Function(
     AbsBook book,
     String? chapterTitle,
+    String? coverUrl,
     Future<void> Function() onNext,
   ) onPlayed;
   @override State<AudiobookshelfPage> createState() => _AudiobookshelfPageState();
@@ -99,7 +100,7 @@ class _AudiobookshelfPageState extends State<AudiobookshelfPage> {
 
   Future<void> _play({double? position}) async {
     final device = widget.device; final detail = _detail;
-    if (device == null) { _message('请先在首页选择音箱'); return; }
+    if (device == null) { _message('请先在设备页面选择音箱'); return; }
     if (detail == null || _api == null) return;
     setState(() { _busy = true; _error = null; });
     try {
@@ -116,7 +117,8 @@ class _AudiobookshelfPageState extends State<AudiobookshelfPage> {
           break;
         }
       }
-      widget.onPlayed(detail.book, chapterTitle, _playNext);
+      final coverUrl = '${_config!.normalizedBaseUrl}/api/items/${detail.book.id}/cover?token=${Uri.encodeQueryComponent(_config!.apiKey.trim())}';
+      widget.onPlayed(detail.book, chapterTitle, coverUrl, _playNext);
       _message(playback.exactTrack ? '已从所选章节对应音轨开始播放' : '已推送音频；单文件 M4B 可能因音箱不支持跳转而从头播放');
     } catch (error) { if (mounted) setState(() => _error = error.toString()); }
     finally { if (mounted) setState(() => _busy = false); }
