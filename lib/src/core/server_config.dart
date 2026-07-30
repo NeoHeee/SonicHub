@@ -9,6 +9,8 @@ class ServerConfig {
   final String username;
   final String password;
 
-  String get normalizedBaseUrl =>
-      baseUrl.trim().replaceFirst(RegExp(r'/+$'), '');
+  static String normalizeBaseUrl(String value) =>
+      value.replaceAll(RegExp(r'\s+'), '').replaceFirst(RegExp(r'/+$'), '');
+
+  String get normalizedBaseUrl => normalizeBaseUrl(baseUrl);
 }
