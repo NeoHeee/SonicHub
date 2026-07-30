@@ -190,7 +190,8 @@ class _HomePage extends StatelessWidget {
                   child: Padding(
                     padding: const EdgeInsets.all(16),
                     child: DropdownButtonFormField<SpeakerDevice>(
-                      value: items.any((item) => item.id == current.id) ? current : items.first,
+                      key: ValueKey(current.id),
+                      initialValue: items.any((item) => item.id == current.id) ? current : items.first,
                       decoration: const InputDecoration(labelText: '当前音箱', prefixIcon: Icon(Icons.speaker)),
                       items: [for (final item in items) DropdownMenuItem(value: item, child: Text(item.name))],
                       onChanged: onDeviceChanged,
