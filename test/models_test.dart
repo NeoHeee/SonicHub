@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sonichub/src/core/models.dart';
+import 'package:sonichub/src/core/server_config.dart';
 
 void main() {
   test('parses MIoT device using upstream field names', () {
@@ -60,5 +61,16 @@ void main() {
 
     expect(playlist.songCount, 12);
     expect(song.subtitle, '歌手 · 专辑');
+  });
+
+  test('normalizes whitespace and trailing slashes in server URL', () {
+    expect(
+      ServerConfig.normalizeBaseUrl('  http:// 192.168.1.1:58092///  '),
+      'http://192.168.1.1:58092',
+    );
+    expect(
+      ServerConfig.normalizeBaseUrl('https://songloft.example.com/'),
+      'https://songloft.example.com',
+    );
   });
 }
