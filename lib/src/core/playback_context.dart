@@ -14,6 +14,7 @@ class PlaybackContext {
     this.syncMessage,
     this.onPrevious,
     this.onNext,
+    this.onSeek,
   });
 
   final PlaybackSource source;
@@ -26,6 +27,7 @@ class PlaybackContext {
   final String? syncMessage;
   final Future<void> Function()? onPrevious;
   final Future<void> Function()? onNext;
+  final Future<void> Function(double position)? onSeek;
 
   bool get isAudiobook => source == PlaybackSource.audiobookshelf;
   String get sourceLabel => switch (source) {
