@@ -16,6 +16,22 @@ class ConfigStore {
     ]);
   }
 
+  Future<void> saveSelectedDevice(String accountId, String deviceId) async {
+    await Future.wait([
+      _storage.write(key: 'selected_device_account_id', value: accountId),
+      _storage.write(key: 'selected_device_id', value: deviceId),
+    ]);
+  }
+
+  Future<({String accountId, String deviceId})?> loadSelectedDevice() async {
+    final values = await Future.wait([
+      _storage.read(key: 'selected_device_account_id'),
+      _storage.read(key: 'selected_device_id'),
+    ]);
+    if (values.any((value) => value == null || value.isEmpty)) return null;
+    return (accountId: values[0]!, deviceId: values[1]!);
+  }
+
   Future<ServerConfig?> load() async {
     final values = await Future.wait([
       _storage.read(key: 'songloft_base_url'),

@@ -8,18 +8,18 @@ MIoT 插件把内容推送到智能音箱。
 
 ## 当前进度
 
-项目处于 `v0.1.0` 第一轮核心链路验证阶段，已经具备：
+当前版本为 `v0.6.0`，已完成统一首页、音乐曲库、有声书和多音源页面的第一版整合：
 
-- Songloft 服务地址和管理员账号配置
-- Songloft 健康检查与 Token 登录
-- MIoT 音箱设备列表
-- HTTP/HTTPS 音频直链投送
-- 播放、暂停、停止和音量控制
-- Android Keystore 加密保存连接凭据
-- GitHub Actions 自动分析、测试和构建 APK
+- 首页统一展示 Songloft、Audiobookshelf 和音频直链的播放上下文
+- 音乐页统一管理歌单、曲库层级和歌曲操作菜单
+- 有声书页支持书库、继续收听、章节定位和进度回传
+- 多音源页集中展示各音源接入状态和入口
+- 设备页支持默认音箱、状态刷新和投送反馈
+- 全局统一加载、空状态、错误提示和重试反馈
+- 固定 Android Release 签名与 GitHub Actions 构建
 
-第一轮暂不包含 Songloft 曲库搜索、Audiobookshelf、Navidrome 和 LXBridge，
-这些功能将在核心投送链路经真实设备验证后逐步加入。
+下载管理、睡眠定时、播放速度和 Subsonic/Navidrome/LXBridge 仍保留为后续扩展，
+在对应服务端接口和设备能力具备前不会显示为虚假可用功能。
 
 ## 使用要求
 

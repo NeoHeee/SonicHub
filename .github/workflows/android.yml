@@ -26,7 +26,65 @@ jobs:
         run: |
           flutter create --platforms=android --org com.neo --project-name sonichub /tmp/sonichub-platform
           cp -R /tmp/sonichub-platform/android ./android
-          sed -i 's/android:label="sonichub"/android:label="音枢"/' android/app/src/main/AndroidManifest.xml
+          manifest=android/app/src/main/AndroidManifest.xml
+          sed -i 's/android:label="sonichub"/android:label="音枢"/' "$manifest"
+          sed -i '/<manifest/a\\    <uses-permission android:name="android.permission.INTERNET" />' "$manifest"
+          sed -i 's/<application/<application android:usesCleartextTraffic="true"/' "$manifest"
+          grep -q 'android.permission.INTERNET' "$manifest"
+          grep -q 'android:usesCleartextTraffic="true"' "$manifest"
+
+      - name: Configure fixed release signing
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          test -n "$ANDROID_KEYSTORE_BASE64" || (echo "::error::ANDROID_KEYSTORE_BASE64 is missing" && exit 1)
+          test -n "$ANDROID_KEYSTORE_PASSWORD" || (echo "::error::ANDROID_KEYSTORE_PASSWORD is missing" && exit 1)
+          test -n "$ANDROID_KEY_ALIAS" || (echo "::error::ANDROID_KEY_ALIAS is missing" && exit 1)
+          test -n "$ANDROID_KEY_PASSWORD" || (echo "::error::ANDROID_KEY_PASSWORD is missing" && exit 1)
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > android/app/sonichub-release.jks
+          {
+            echo "storeFile=sonichub-release.jks"
+            echo "storePassword=$ANDROID_KEYSTORE_PASSWORD"
+            echo "keyAlias=$ANDROID_KEY_ALIAS"
+            echo "keyPassword=$ANDROID_KEY_PASSWORD"
+          } > android/key.properties
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("android/app/build.gradle.kts")
+          source = path.read_text()
+          source = (
+              'import java.io.FileInputStream\n'
+              'import java.util.Properties\n\n'
+              'val keystoreProperties = Properties()\n'
+              'val keystorePropertiesFile = rootProject.file("key.properties")\n'
+              'keystoreProperties.load(FileInputStream(keystorePropertiesFile))\n\n'
+              + source
+          )
+          marker = "    buildTypes {"
+          signing = """    signingConfigs {
+                  create("release") {
+                      keyAlias = keystoreProperties["keyAlias"] as String
+                      keyPassword = keystoreProperties["keyPassword"] as String
+                      storeFile = file(keystoreProperties["storeFile"] as String)
+                      storePassword = keystoreProperties["storePassword"] as String
+                  }
+              }
+
+          """
+          if marker not in source:
+              raise SystemExit("Could not locate buildTypes in generated Gradle file")
+          source = source.replace(marker, signing + marker, 1)
+          source = source.replace(
+              'signingConfig = signingConfigs.getByName("debug")',
+              'signingConfig = signingConfigs.getByName("release")',
+              1,
+          )
+          path.write_text(source)
+          PY
 
       - name: Install dependencies
         run: flutter pub get
@@ -37,12 +95,18 @@ jobs:
       - name: Test
         run: flutter test
 
-      - name: Build debug APK
-        run: flutter build apk --debug
+      - name: Build signed release APK
+        run: flutter build apk --release
+
+      - name: Verify APK signature
+        run: |
+          ${ANDROID_HOME}/build-tools/$(ls "${ANDROID_HOME}/build-tools" | sort -V | tail -1)/apksigner verify --verbose --print-certs build/app/outputs/flutter-apk/app-release.apk
+          keytool -list -v -keystore android/app/sonichub-release.jks -storepass "${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" -alias "${{ secrets.ANDROID_KEY_ALIAS }}" | grep -E "Alias name:|SHA256:"
+          cp build/app/outputs/flutter-apk/app-release.apk build/app/outputs/flutter-apk/SonicHub-v0.6.0-release.apk
 
       - uses: actions/upload-artifact@v4
         with:
-          name: sonichub-v0.2.0-debug-apk
-          path: build/app/outputs/flutter-apk/app-debug.apk
+          name: sonichub-v0.6.0-signed-release-apk
+          path: build/app/outputs/flutter-apk/SonicHub-v0.6.0-release.apk
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 30

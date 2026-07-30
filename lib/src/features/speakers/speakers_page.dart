@@ -2,47 +2,38 @@ import 'package:flutter/material.dart';
 
 import '../../core/models.dart';
 import '../../core/songloft_api.dart';
-import '../url_player/url_player_sheet.dart';
 
-class SpeakersPage extends StatefulWidget {
-  const SpeakersPage({required this.api, super.key});
+class SpeakersPage extends StatelessWidget {
+  const SpeakersPage({
+    required this.devices,
+    required this.api,
+    required this.selectedDevice,
+    required this.onSelected,
+    required this.onRefresh,
+    super.key,
+  });
+
+  final Future<List<SpeakerDevice>> devices;
   final SongloftApi api;
-
-  @override
-  State<SpeakersPage> createState() => _SpeakersPageState();
-}
-
-class _SpeakersPageState extends State<SpeakersPage> {
-  late Future<List<SpeakerDevice>> _devices;
-
-  @override
-  void initState() {
-    super.initState();
-    _reload();
-  }
-
-  void _reload() {
-    final devices = widget.api.getDevices();
-    setState(() {
-      _devices = devices;
-    });
-  }
+  final SpeakerDevice? selectedDevice;
+  final ValueChanged<SpeakerDevice> onSelected;
+  final Future<void> Function() onRefresh;
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('选择音箱'),
+        title: const Text('设备'),
         actions: [
           IconButton(
-            onPressed: _reload,
+            onPressed: onRefresh,
             tooltip: '刷新设备',
             icon: const Icon(Icons.refresh),
           ),
         ],
       ),
       body: FutureBuilder<List<SpeakerDevice>>(
-        future: _devices,
+        future: devices,
         builder: (context, snapshot) {
           if (snapshot.connectionState != ConnectionState.done) {
             return const Center(child: CircularProgressIndicator());
@@ -51,45 +42,170 @@ class _SpeakersPageState extends State<SpeakersPage> {
             return _Message(
               icon: Icons.cloud_off_outlined,
               text: snapshot.error.toString(),
-              action: _reload,
+              action: onRefresh,
             );
           }
-          final devices = snapshot.data ?? const [];
-          if (devices.isEmpty) {
+          final items = snapshot.data ?? const [];
+          if (items.isEmpty) {
             return _Message(
               icon: Icons.speaker_group_outlined,
               text: '没有找到音箱，请先在 MIoT 插件中添加账号并启用设备。',
-              action: _reload,
+              action: onRefresh,
             );
           }
-          return ListView.separated(
-            padding: const EdgeInsets.all(16),
-            itemCount: devices.length,
-            separatorBuilder: (_, __) => const SizedBox(height: 10),
-            itemBuilder: (context, index) {
-              final device = devices[index];
-              return Card(
-                child: ListTile(
-                  contentPadding: const EdgeInsets.all(14),
-                  leading: const CircleAvatar(
-                    child: Icon(Icons.speaker_rounded),
-                  ),
-                  title: Text(device.name),
-                  subtitle: Text(device.model ?? '智能音箱'),
-                  trailing: const Icon(Icons.chevron_right),
-                  onTap: () => showModalBottomSheet<void>(
-                    context: context,
-                    isScrollControlled: true,
-                    builder: (_) => UrlPlayerSheet(
-                      api: widget.api,
-                      device: device,
+          return RefreshIndicator(
+            onRefresh: onRefresh,
+            child: ListView.separated(
+              padding: const EdgeInsets.all(16),
+              itemCount: items.length,
+              separatorBuilder: (_, __) => const SizedBox(height: 10),
+              itemBuilder: (context, index) {
+                final device = items[index];
+                final selected = device.id == selectedDevice?.id &&
+                    device.accountId == selectedDevice?.accountId;
+                return Card(
+                  color: selected
+                      ? Theme.of(context).colorScheme.primaryContainer
+                      : null,
+                  child: ListTile(
+                    contentPadding: const EdgeInsets.all(14),
+                    leading: CircleAvatar(
+                      child: Icon(selected ? Icons.speaker : Icons.speaker_outlined),
                     ),
+                    title: Text(device.name),
+                    subtitle: Text([
+                      device.model ?? '智能音箱',
+                      if (selected) '默认输出设备',
+                    ].join(' · ')),
+                    trailing: selected
+                        ? const Icon(Icons.check_circle)
+                        : const Icon(Icons.radio_button_unchecked),
+                    onTap: () => onSelected(device),
+                    onLongPress: () => _showDeviceDetail(context, device, selected),
                   ),
-                ),
-              );
-            },
+                );
+              },
+            ),
           );
         },
+      ),
+    );
+  }
+
+  Future<void> _showDeviceDetail(
+    BuildContext context,
+    SpeakerDevice device,
+    bool selected,
+  ) async {
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (sheetContext) => _DeviceDetailSheet(
+        api: api,
+        device: device,
+        selected: selected,
+        onUse: () {
+          onSelected(device);
+          Navigator.pop(sheetContext);
+        },
+      ),
+    );
+  }
+}
+
+class _DeviceDetailSheet extends StatefulWidget {
+  const _DeviceDetailSheet({
+    required this.api,
+    required this.device,
+    required this.selected,
+    required this.onUse,
+  });
+  final SongloftApi api;
+  final SpeakerDevice device;
+  final bool selected;
+  final VoidCallback onUse;
+
+  @override
+  State<_DeviceDetailSheet> createState() => _DeviceDetailSheetState();
+}
+
+class _DeviceDetailSheetState extends State<_DeviceDetailSheet> {
+  late Future<DeviceStatus> _status = widget.api.getStatus(widget.device);
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const CircleAvatar(child: Icon(Icons.speaker)),
+              title: Text(widget.device.name),
+              subtitle: Text(widget.device.model ?? '智能音箱'),
+              trailing: IconButton(
+                tooltip: '刷新状态',
+                onPressed: () => setState(
+                  () => _status = widget.api.getStatus(widget.device),
+                ),
+                icon: const Icon(Icons.refresh),
+              ),
+            ),
+            FutureBuilder<DeviceStatus>(
+              future: _status,
+              builder: (context, snapshot) {
+                if (snapshot.connectionState != ConnectionState.done) {
+                  return const Padding(
+                    padding: EdgeInsets.all(24),
+                    child: Center(child: CircularProgressIndicator()),
+                  );
+                }
+                if (snapshot.hasError) {
+                  return _Message(
+                    icon: Icons.cloud_off_outlined,
+                    text: '状态读取失败：${snapshot.error}',
+                    action: () async => setState(
+                      () => _status = widget.api.getStatus(widget.device),
+                    ),
+                  );
+                }
+                final status = snapshot.data!;
+                return Card(
+                  child: Column(
+                    children: [
+                      ListTile(
+                        leading: Icon(
+                          status.state == 'playing'
+                              ? Icons.play_circle
+                              : Icons.pause_circle_outline,
+                        ),
+                        title: Text(status.currentSong?.title ?? '暂无播放内容'),
+                        subtitle: Text('状态：${status.state}'),
+                      ),
+                      ListTile(
+                        leading: const Icon(Icons.volume_up_outlined),
+                        title: const Text('当前音量'),
+                        trailing: Text(status.volume == null
+                            ? '未知'
+                            : '${status.volume}%'),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+            const SizedBox(height: 12),
+            FilledButton.icon(
+              onPressed: widget.selected ? null : widget.onUse,
+              icon: const Icon(Icons.check_circle_outline),
+              label: Text(widget.selected ? '当前默认音箱' : '设为默认音箱'),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -104,7 +220,7 @@ class _Message extends StatelessWidget {
 
   final IconData icon;
   final String text;
-  final VoidCallback action;
+  final Future<void> Function() action;
 
   @override
   Widget build(BuildContext context) {
