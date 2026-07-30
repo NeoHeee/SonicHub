@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../core/audiobookshelf_api.dart';
 import '../../core/config_store.dart';
 import '../../core/models.dart';
 import '../audiobookshelf/audiobookshelf_page.dart';
@@ -639,7 +640,7 @@ class _LibraryPageState extends State<_LibraryPage> {
               song.album.toLowerCase().contains(keyword);
         })
         .toList();
-    return Scaffold(
+    final page = Scaffold(
       appBar: AppBar(
         title: Text(_selected?.name ?? '曲库与歌单'),
         leading: _selected == null
@@ -754,6 +755,20 @@ class _LibraryPageState extends State<_LibraryPage> {
               ],
             ),
     );
+    if (_selected == null) return page;
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop) {
+          setState(() {
+            _selected = null;
+            _songs = const [];
+            _query.clear();
+          });
+        }
+      },
+      child: page,
+    );
   }
 }
 
@@ -834,7 +849,7 @@ class _SettingsPage extends StatelessWidget {
           const SizedBox(height: 24),
           const ListTile(
             title: Text('版本'),
-            subtitle: Text('0.3.0 测试版'),
+            subtitle: Text('0.3.1 测试版'),
           ),
         ],
       ),
