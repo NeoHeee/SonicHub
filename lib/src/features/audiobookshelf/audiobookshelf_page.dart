@@ -10,7 +10,7 @@ class AudiobookshelfPage extends StatefulWidget {
   const AudiobookshelfPage({required this.songloftApi, required this.device, required this.onPlayed, super.key});
   final SongloftApi songloftApi;
   final SpeakerDevice? device;
-  final VoidCallback onPlayed;
+  final void Function(AbsBook book, String? chapterTitle) onPlayed;
   @override State<AudiobookshelfPage> createState() => _AudiobookshelfPageState();
 }
 
@@ -104,7 +104,15 @@ class _AudiobookshelfPageState extends State<AudiobookshelfPage> {
       _playingBook = detail; _playback = playback;
       _progressTimer?.cancel();
       _progressTimer = Timer.periodic(const Duration(seconds: 30), (_) => _syncProgress());
-      widget.onPlayed();
+      String? chapterTitle;
+      final target = position ?? detail.book.progress.currentTime;
+      for (final chapter in detail.chapters) {
+        if (target >= chapter.start && target < chapter.end) {
+          chapterTitle = chapter.title;
+          break;
+        }
+      }
+      widget.onPlayed(detail.book, chapterTitle);
       _message(playback.exactTrack ? '已从所选章节对应音轨开始播放' : '已推送音频；单文件 M4B 可能因音箱不支持跳转而从头播放');
     } catch (error) { if (mounted) setState(() => _error = error.toString()); }
     finally { if (mounted) setState(() => _busy = false); }
