@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/models.dart';
+import '../../core/local_audio_player.dart';
 import '../../core/songloft_api.dart';
 
 class UrlPlayerSheet extends StatefulWidget {
@@ -8,12 +9,18 @@ class UrlPlayerSheet extends StatefulWidget {
     required this.api,
     required this.device,
     required this.onPlayed,
+    this.onLocalPlayed,
+    this.localPlayer,
     super.key,
   });
 
   final SongloftApi api;
   final SpeakerDevice device;
   final ValueChanged<String> onPlayed;
+  final Future<void> Function(String url)? onLocalPlayed;
+  final LocalAudioPlayer? localPlayer;
+
+  bool get isLocal => device.isLocal;
 
   @override
   State<UrlPlayerSheet> createState() => _UrlPlayerSheetState();
@@ -28,6 +35,7 @@ class _UrlPlayerSheetState extends State<UrlPlayerSheet> {
   @override
   void initState() {
     super.initState();
+    if (widget.isLocal) return;
     widget.api.getStatus(widget.device).then((status) {
       if (mounted && status.volume != null) {
         setState(() => _volume = status.volume!.toDouble());
@@ -98,10 +106,14 @@ class _UrlPlayerSheetState extends State<UrlPlayerSheet> {
                         }
                         _run(
                           () async {
-                            await widget.api.playUrl(widget.device, uri.toString());
-                            widget.onPlayed(uri.toString());
+                            if (widget.isLocal) {
+                              await widget.onLocalPlayed?.call(uri.toString());
+                            } else {
+                              await widget.api.playUrl(widget.device, uri.toString());
+                              widget.onPlayed(uri.toString());
+                            }
                           },
-                          '已发送到音箱',
+                          widget.isLocal ? '已开始本机播放' : '已发送到音箱',
                         );
                       },
                 icon: const Icon(Icons.cast_rounded),
@@ -115,8 +127,10 @@ class _UrlPlayerSheetState extends State<UrlPlayerSheet> {
                     onPressed: _busy
                         ? null
                         : () => _run(
-                              () => widget.api.pause(widget.device),
-                              '已暂停',
+                              widget.isLocal
+                                  ? widget.localPlayer!.pause
+                                  : () => widget.api.pause(widget.device),
+                              widget.isLocal ? '本机已暂停' : '已暂停',
                             ),
                     tooltip: '暂停',
                     icon: const Icon(Icons.pause),
@@ -125,8 +139,10 @@ class _UrlPlayerSheetState extends State<UrlPlayerSheet> {
                     onPressed: _busy
                         ? null
                         : () => _run(
-                              () => widget.api.resume(widget.device),
-                              '已继续播放',
+                              widget.isLocal
+                                  ? widget.localPlayer!.resume
+                                  : () => widget.api.resume(widget.device),
+                              widget.isLocal ? '本机已继续播放' : '已继续播放',
                             ),
                     tooltip: '继续',
                     icon: const Icon(Icons.play_arrow),
@@ -135,8 +151,10 @@ class _UrlPlayerSheetState extends State<UrlPlayerSheet> {
                     onPressed: _busy
                         ? null
                         : () => _run(
-                              () => widget.api.stop(widget.device),
-                              '已停止',
+                              widget.isLocal
+                                  ? widget.localPlayer!.stop
+                                  : () => widget.api.stop(widget.device),
+                              widget.isLocal ? '本机已停止' : '已停止',
                             ),
                     tooltip: '停止',
                     icon: const Icon(Icons.stop),
@@ -144,7 +162,7 @@ class _UrlPlayerSheetState extends State<UrlPlayerSheet> {
                 ],
               ),
               const SizedBox(height: 18),
-              Row(
+              if (!widget.isLocal) Row(
                 children: [
                   const Icon(Icons.volume_down),
                   Expanded(
