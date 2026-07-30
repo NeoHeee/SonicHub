@@ -333,6 +333,18 @@ class _MainShellState extends State<MainShell> {
         api: widget.api,
         device: _selectedDevice,
         onPlayed: _clearExternalPlayback,
+        onOpenAudiobook: () => setState(() => _index = 2),
+        onOpenDirectUrl: _selectedDevice == null
+            ? null
+            : () => showModalBottomSheet<void>(
+                  context: context,
+                  isScrollControlled: true,
+                  builder: (_) => UrlPlayerSheet(
+                    api: widget.api,
+                    device: _selectedDevice!,
+                    onPlayed: _showDirectUrl,
+                  ),
+                ).then((_) => _refreshStatus()),
       ),
       AudiobookshelfPage(
         songloftApi: widget.api,
@@ -798,11 +810,15 @@ class _LibraryPage extends StatefulWidget {
     required this.api,
     required this.device,
     required this.onPlayed,
+    required this.onOpenAudiobook,
+    required this.onOpenDirectUrl,
   });
 
   final SongloftApi api;
   final SpeakerDevice? device;
   final VoidCallback onPlayed;
+  final VoidCallback onOpenAudiobook;
+  final VoidCallback? onOpenDirectUrl;
 
   @override
   State<_LibraryPage> createState() => _LibraryPageState();
@@ -815,6 +831,7 @@ class _LibraryPageState extends State<_LibraryPage> {
   List<MediaItem> _songs = const [];
   bool _busy = false;
   String? _error;
+  bool _showSources = false;
 
   @override
   void initState() {
@@ -905,6 +922,99 @@ class _LibraryPageState extends State<_LibraryPage> {
     if (action == 'play') await _play(song, index);
   }
 
+  Widget _buildSourceHub(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+      children: [
+        Text('统一音源入口', style: Theme.of(context).textTheme.titleLarge),
+        const SizedBox(height: 6),
+        Text('在同一处查看已接入的音乐、有声书和直链播放能力。', style: TextStyle(color: scheme.onSurfaceVariant)),
+        const SizedBox(height: 16),
+        _SourceCard(
+          icon: Icons.library_music,
+          title: 'Songloft 音乐',
+          subtitle: '歌单、曲库与音箱播放控制',
+          status: '已连接',
+          color: scheme.primary,
+          onTap: () => setState(() => _showSources = false),
+        ),
+        const SizedBox(height: 10),
+        _SourceCard(
+          icon: Icons.auto_stories,
+          title: 'Audiobookshelf 有声书',
+          subtitle: '书库、章节、继续收听与进度同步',
+          status: '打开有声书',
+          color: scheme.tertiary,
+          onTap: widget.onOpenAudiobook,
+        ),
+        const SizedBox(height: 10),
+        _SourceCard(
+          icon: Icons.link,
+          title: '音频直链',
+          subtitle: '将 HTTP/HTTPS 音频地址投送到当前音箱',
+          status: widget.onOpenDirectUrl == null ? '请先选择音箱' : '立即投送',
+          color: scheme.secondary,
+          onTap: widget.onOpenDirectUrl,
+        ),
+        const SizedBox(height: 18),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              children: [
+                Icon(Icons.info_outline, color: scheme.primary),
+                const SizedBox(width: 12),
+                const Expanded(child: Text('Subsonic、Navidrome 与 LXBridge 先保留为扩展位，待对应服务端接口接入后启用。')),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildPlaylistHub() {
+    return FutureBuilder<List<PlaylistSummary>>(
+      future: _playlists,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState != ConnectionState.done) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        if (snapshot.hasError) {
+          return _ErrorView(
+            message: snapshot.error.toString(),
+            onRetry: () => setState(() => _playlists = widget.api.getPlaylists()),
+          );
+        }
+        final playlists = snapshot.data ?? const [];
+        if (playlists.isEmpty) {
+          return const _EmptyState(icon: Icons.queue_music_outlined, title: '暂无可播放歌单', actionLabel: '重新加载');
+        }
+        return RefreshIndicator(
+          onRefresh: () async => setState(() => _playlists = widget.api.getPlaylists()),
+          child: ListView.separated(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+            itemCount: playlists.length,
+            separatorBuilder: (_, __) => const SizedBox(height: 8),
+            itemBuilder: (_, index) {
+              final playlist = playlists[index];
+              return Card(
+                child: ListTile(
+                  leading: const CircleAvatar(child: Icon(Icons.queue_music)),
+                  title: Text(playlist.name),
+                  subtitle: Text('${playlist.songCount} 首歌曲'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => _loadPlaylist(playlist),
+                ),
+              );
+            },
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final keyword = _query.text.trim().toLowerCase();
@@ -921,7 +1031,7 @@ class _LibraryPageState extends State<_LibraryPage> {
         .toList();
     final page = Scaffold(
       appBar: AppBar(
-        title: Text(_selected?.name ?? '曲库与歌单'),
+        title: Text(_selected?.name ?? (_showSources ? '多音源' : '音乐')),
         leading: _selected == null
             ? null
             : IconButton(
@@ -934,47 +1044,21 @@ class _LibraryPageState extends State<_LibraryPage> {
               ),
       ),
       body: _selected == null
-          ? FutureBuilder<List<PlaylistSummary>>(
-              future: _playlists,
-              builder: (context, snapshot) {
-                if (snapshot.connectionState != ConnectionState.done) {
-                  return const Center(child: CircularProgressIndicator());
-                }
-                if (snapshot.hasError) {
-                  return _ErrorView(
-                    message: snapshot.error.toString(),
-                    onRetry: () => setState(
-                      () => _playlists = widget.api.getPlaylists(),
-                    ),
-                  );
-                }
-                final playlists = snapshot.data ?? const [];
-                if (playlists.isEmpty) {
-                  return const Center(child: Text('暂无可播放歌单'));
-                }
-                return RefreshIndicator(
-                  onRefresh: () async => setState(
-                    () => _playlists = widget.api.getPlaylists(),
+          ? Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+                  child: SegmentedButton<bool>(
+                    segments: const [
+                      ButtonSegment(value: false, label: Text('曲库'), icon: Icon(Icons.library_music_outlined)),
+                      ButtonSegment(value: true, label: Text('多音源'), icon: Icon(Icons.hub_outlined)),
+                    ],
+                    selected: {_showSources},
+                    onSelectionChanged: (values) => setState(() => _showSources = values.first),
                   ),
-                  child: ListView.separated(
-                    padding: const EdgeInsets.all(16),
-                    itemCount: playlists.length,
-                    separatorBuilder: (_, __) => const SizedBox(height: 8),
-                    itemBuilder: (_, index) {
-                      final playlist = playlists[index];
-                      return Card(
-                        child: ListTile(
-                          leading: const Icon(Icons.queue_music),
-                          title: Text(playlist.name),
-                          subtitle: Text('${playlist.songCount} 首'),
-                          trailing: const Icon(Icons.chevron_right),
-                          onTap: () => _loadPlaylist(playlist),
-                        ),
-                      );
-                    },
-                  ),
-                );
-              },
+                ),
+                Expanded(child: _showSources ? _buildSourceHub(context) : _buildPlaylistHub()),
+              ],
             )
           : Column(
               children: [
@@ -1053,6 +1137,53 @@ class _LibraryPageState extends State<_LibraryPage> {
         }
       },
       child: page,
+    );
+  }
+}
+
+class _SourceCard extends StatelessWidget {
+  const _SourceCard({required this.icon, required this.title, required this.subtitle, required this.status, required this.color, this.onTap});
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final String status;
+  final Color color;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: ListTile(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        leading: CircleAvatar(backgroundColor: color.withValues(alpha: .14), foregroundColor: color, child: Icon(icon)),
+        title: Text(title),
+        subtitle: Text(subtitle),
+        trailing: Chip(label: Text(status), visualDensity: VisualDensity.compact),
+        onTap: onTap,
+      ),
+    );
+  }
+}
+
+class _EmptyState extends StatelessWidget {
+  const _EmptyState({required this.icon, required this.title, required this.actionLabel});
+  final IconData icon;
+  final String title;
+  final String actionLabel;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 54, color: Theme.of(context).colorScheme.outline),
+          const SizedBox(height: 12),
+          Text(title),
+          const SizedBox(height: 10),
+          Text(actionLabel, style: TextStyle(color: Theme.of(context).colorScheme.primary)),
+        ],
+      ),
     );
   }
 }
@@ -1180,7 +1311,7 @@ class _SettingsPage extends StatelessWidget {
           const SizedBox(height: 24),
           const ListTile(
             title: Text('版本'),
-            subtitle: Text('0.5.0 交互与信息架构升级版'),
+            subtitle: Text('0.6.0 统一音源与页面体验版'),
           ),
         ],
       ),
