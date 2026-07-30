@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 
 import '../../core/models.dart';
+import '../../core/songloft_api.dart';
 
 class SpeakersPage extends StatelessWidget {
   const SpeakersPage({
     required this.devices,
+    required this.api,
     required this.selectedDevice,
     required this.onSelected,
     required this.onRefresh,
@@ -12,6 +14,7 @@ class SpeakersPage extends StatelessWidget {
   });
 
   final Future<List<SpeakerDevice>> devices;
+  final SongloftApi api;
   final SpeakerDevice? selectedDevice;
   final ValueChanged<SpeakerDevice> onSelected;
   final Future<void> Function() onRefresh;
@@ -70,17 +73,139 @@ class SpeakersPage extends StatelessWidget {
                       child: Icon(selected ? Icons.speaker : Icons.speaker_outlined),
                     ),
                     title: Text(device.name),
-                    subtitle: Text(device.model ?? '智能音箱'),
+                    subtitle: Text([
+                      device.model ?? '智能音箱',
+                      if (selected) '默认输出设备',
+                    ].join(' · ')),
                     trailing: selected
                         ? const Icon(Icons.check_circle)
                         : const Icon(Icons.radio_button_unchecked),
                     onTap: () => onSelected(device),
+                    onLongPress: () => _showDeviceDetail(context, device, selected),
                   ),
                 );
               },
             ),
           );
         },
+      ),
+    );
+  }
+
+  Future<void> _showDeviceDetail(
+    BuildContext context,
+    SpeakerDevice device,
+    bool selected,
+  ) async {
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (sheetContext) => _DeviceDetailSheet(
+        api: api,
+        device: device,
+        selected: selected,
+        onUse: () {
+          onSelected(device);
+          Navigator.pop(sheetContext);
+        },
+      ),
+    );
+  }
+}
+
+class _DeviceDetailSheet extends StatefulWidget {
+  const _DeviceDetailSheet({
+    required this.api,
+    required this.device,
+    required this.selected,
+    required this.onUse,
+  });
+  final SongloftApi api;
+  final SpeakerDevice device;
+  final bool selected;
+  final VoidCallback onUse;
+
+  @override
+  State<_DeviceDetailSheet> createState() => _DeviceDetailSheetState();
+}
+
+class _DeviceDetailSheetState extends State<_DeviceDetailSheet> {
+  late Future<DeviceStatus> _status = widget.api.getStatus(widget.device);
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const CircleAvatar(child: Icon(Icons.speaker)),
+              title: Text(widget.device.name),
+              subtitle: Text(widget.device.model ?? '智能音箱'),
+              trailing: IconButton(
+                tooltip: '刷新状态',
+                onPressed: () => setState(
+                  () => _status = widget.api.getStatus(widget.device),
+                ),
+                icon: const Icon(Icons.refresh),
+              ),
+            ),
+            FutureBuilder<DeviceStatus>(
+              future: _status,
+              builder: (context, snapshot) {
+                if (snapshot.connectionState != ConnectionState.done) {
+                  return const Padding(
+                    padding: EdgeInsets.all(24),
+                    child: Center(child: CircularProgressIndicator()),
+                  );
+                }
+                if (snapshot.hasError) {
+                  return _Message(
+                    icon: Icons.cloud_off_outlined,
+                    text: '状态读取失败：${snapshot.error}',
+                    action: () async => setState(
+                      () => _status = widget.api.getStatus(widget.device),
+                    ),
+                  );
+                }
+                final status = snapshot.data!;
+                return Card(
+                  child: Column(
+                    children: [
+                      ListTile(
+                        leading: Icon(
+                          status.state == 'playing'
+                              ? Icons.play_circle
+                              : Icons.pause_circle_outline,
+                        ),
+                        title: Text(status.currentSong?.title ?? '暂无播放内容'),
+                        subtitle: Text('状态：${status.state}'),
+                      ),
+                      ListTile(
+                        leading: const Icon(Icons.volume_up_outlined),
+                        title: const Text('当前音量'),
+                        trailing: Text(status.volume == null
+                            ? '未知'
+                            : '${status.volume}%'),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+            const SizedBox(height: 12),
+            FilledButton.icon(
+              onPressed: widget.selected ? null : widget.onUse,
+              icon: const Icon(Icons.check_circle_outline),
+              label: Text(widget.selected ? '当前默认音箱' : '设为默认音箱'),
+            ),
+          ],
+        ),
       ),
     );
   }
