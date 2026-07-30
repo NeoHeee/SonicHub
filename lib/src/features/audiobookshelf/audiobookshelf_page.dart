@@ -36,6 +36,7 @@ class _AudiobookshelfPageState extends State<AudiobookshelfPage> {
   Timer? _progressTimer;
   AbsBookDetail? _playingBook;
   AbsPlayback? _playback;
+  String _syncState = '尚未同步';
 
   @override void initState() { super.initState(); _restore(); }
   @override void dispose() { _progressTimer?.cancel(); _syncProgress(); _baseUrl.dispose(); _apiKey.dispose(); _search.dispose(); super.dispose(); }
@@ -107,6 +108,7 @@ class _AudiobookshelfPageState extends State<AudiobookshelfPage> {
       final playback = await _api!.createPlayback(detail, position: position);
       await widget.songloftApi.playUrl(device, playback.url);
       _playingBook = detail; _playback = playback;
+      setState(() => _syncState = '等待进度同步');
       _progressTimer?.cancel();
       _progressTimer = Timer.periodic(const Duration(seconds: 30), (_) => _syncProgress());
       String? chapterTitle;
@@ -176,7 +178,10 @@ class _AudiobookshelfPageState extends State<AudiobookshelfPage> {
       final status = await widget.songloftApi.getStatus(device);
       final current = playback.bookPosition + status.position;
       await api.updateProgress(detail.book.id, currentTime: current.clamp(0, playback.duration), duration: playback.duration, isFinished: playback.duration > 0 && current >= playback.duration - 10);
-    } catch (_) {}
+      if (mounted) setState(() => _syncState = '进度已同步');
+    } catch (_) {
+      if (mounted) setState(() => _syncState = '进度同步失败，将自动重试');
+    }
   }
 
   void _message(String message) { if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message))); }
@@ -219,9 +224,10 @@ class _AudiobookshelfPageState extends State<AudiobookshelfPage> {
       Padding(padding: const EdgeInsets.symmetric(horizontal: 16), child: SegmentedButton<bool>(segments: const [ButtonSegment(value: false, label: Text('全部书籍')), ButtonSegment(value: true, label: Text('继续收听'), icon: Icon(Icons.history))], selected: {_continueOnly}, onSelectionChanged: (values) { setState(() => _continueOnly = values.first); _loadBooks(); })),
       if (_busy) const LinearProgressIndicator(),
       if (_error != null) Padding(padding: const EdgeInsets.all(8), child: Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error))),
-      Expanded(child: RefreshIndicator(onRefresh: _loadBooks, child: _books.isEmpty && !_busy ? ListView(children: const [SizedBox(height: 120), Center(child: Text('没有找到有声书'))]) : ListView.builder(padding: const EdgeInsets.all(8), itemCount: _books.length, itemBuilder: (_, index) {
+      Expanded(child: RefreshIndicator(onRefresh: _loadBooks, child: _books.isEmpty && !_busy ? ListView(children: [const SizedBox(height: 100), Icon(Icons.menu_book_outlined, size: 64, color: Theme.of(context).colorScheme.outline), const SizedBox(height: 12), const Center(child: Text('没有找到有声书')), const SizedBox(height: 8), Center(child: OutlinedButton.icon(onPressed: _loadBooks, icon: const Icon(Icons.refresh), label: const Text('重新加载')))]) : ListView.builder(padding: const EdgeInsets.all(8), itemCount: _books.length, itemBuilder: (_, index) {
         final book = _books[index];
-        return Card(child: ListTile(leading: const CircleAvatar(child: Icon(Icons.auto_stories)), title: Text(book.title), subtitle: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [if (book.subtitle.isNotEmpty) Text(book.subtitle), if (book.progress.currentTime > 0) ...[const SizedBox(height: 4), LinearProgressIndicator(value: book.progress.ratio), Text('${_time(book.progress.currentTime)} / ${_time(book.duration)}')]]), trailing: const Icon(Icons.chevron_right), onTap: () => _openBook(book)));
+        final cover = '${_config!.normalizedBaseUrl}/api/items/${book.id}/cover?token=${Uri.encodeQueryComponent(_config!.apiKey.trim())}';
+        return Card(child: ListTile(contentPadding: const EdgeInsets.all(10), leading: ClipRRect(borderRadius: BorderRadius.circular(8), child: Image.network(cover, width: 52, height: 72, fit: BoxFit.cover, errorBuilder: (_, __, ___) => const SizedBox(width: 52, height: 72, child: ColoredBox(color: Color(0xFFE8E0F0), child: Icon(Icons.auto_stories))))), title: Text(book.title, maxLines: 2, overflow: TextOverflow.ellipsis), subtitle: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [if (book.subtitle.isNotEmpty) Text(book.subtitle, maxLines: 1, overflow: TextOverflow.ellipsis), if (book.progress.currentTime > 0) ...[const SizedBox(height: 6), LinearProgressIndicator(value: book.progress.ratio), const SizedBox(height: 3), Text('${_time(book.progress.currentTime)} / ${_time(book.duration)}')]]), trailing: const Icon(Icons.chevron_right), onTap: () => _openBook(book)));
       }))),
     ]),
   );
@@ -230,9 +236,14 @@ class _AudiobookshelfPageState extends State<AudiobookshelfPage> {
     appBar: AppBar(title: Text(detail.book.title), leading: IconButton(onPressed: () => setState(() => _detail = null), icon: const Icon(Icons.arrow_back))),
     body: Column(children: [
       Card(margin: const EdgeInsets.all(12), child: Padding(padding: const EdgeInsets.all(12), child: Column(children: [
-        ListTile(contentPadding: EdgeInsets.zero, leading: const CircleAvatar(child: Icon(Icons.auto_stories)), title: Text(detail.book.title), subtitle: Text(detail.book.subtitle)),
+        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          ClipRRect(borderRadius: BorderRadius.circular(12), child: Image.network('${_config!.normalizedBaseUrl}/api/items/${detail.book.id}/cover?token=${Uri.encodeQueryComponent(_config!.apiKey.trim())}', width: 90, height: 126, fit: BoxFit.cover, errorBuilder: (_, __, ___) => const SizedBox(width: 90, height: 126, child: ColoredBox(color: Color(0xFFE8E0F0), child: Icon(Icons.auto_stories, size: 42))))),
+          const SizedBox(width: 14),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(detail.book.title, style: Theme.of(context).textTheme.titleLarge), const SizedBox(height: 6), Text(detail.book.subtitle), const SizedBox(height: 8), Text('${detail.chapters.length} 章 · ${_time(detail.book.duration)}')]))
+        ]),
         if (detail.book.progress.currentTime > 0) ...[LinearProgressIndicator(value: detail.book.progress.ratio), const SizedBox(height: 6), Text('已听 ${_time(detail.book.progress.currentTime)} / ${_time(detail.book.duration)}')],
-        const SizedBox(height: 8), FilledButton.icon(onPressed: _busy ? null : () => _play(position: detail.book.progress.currentTime), icon: const Icon(Icons.play_arrow), label: Text(detail.book.progress.currentTime > 0 ? '继续收听' : '从头播放')),
+        const SizedBox(height: 12), SizedBox(width: double.infinity, child: FilledButton.icon(onPressed: _busy ? null : () => _play(position: detail.book.progress.currentTime), icon: const Icon(Icons.play_arrow), label: Text(detail.book.progress.currentTime > 0 ? '继续收听' : '从头播放'))),
+        const SizedBox(height: 8), Row(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(_syncState == '进度已同步' ? Icons.cloud_done_outlined : Icons.sync, size: 18), const SizedBox(width: 6), Text(_syncState)]),
         const SizedBox(height: 6), const Text('多文件有声书可定位到对应音轨；单文件 M4B 是否能从章节起点播放取决于音箱的远程跳转能力。', textAlign: TextAlign.center),
       ]))),
       if (_busy) const LinearProgressIndicator(),
