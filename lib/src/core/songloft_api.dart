@@ -65,13 +65,7 @@ class SongloftApi {
   }
 
   Future<List<SpeakerDevice>> getDevices() async {
-    await _ensureLogin();
-    final response = await _client.get(
-      _uri('$_miotPrefix/mina/devices'),
-      headers: _headers,
-    );
-    final body = _decode(response);
-    _ensurePluginSuccess(body);
+    final body = await _getMiot('/mina/devices');
     final groups = body['data'] as List<dynamic>? ?? const [];
     return [
       for (final rawGroup in groups)
@@ -84,6 +78,64 @@ class SongloftApi {
               ),
     ];
   }
+
+  Future<List<MediaItem>> searchSongs(String keyword) async {
+    await _ensureLogin();
+    final response = await _client.get(
+      _uri('$_apiPrefix/songs', {
+        'keyword': keyword.trim(),
+        'limit': '50',
+        'offset': '0',
+      }),
+      headers: _headers,
+    );
+    final body = _decode(response);
+    final songs = body['songs'] as List<dynamic>? ?? const [];
+    return [
+      for (final raw in songs)
+        if (raw is Map<String, dynamic>) MediaItem.fromJson(raw),
+    ];
+  }
+
+  Future<List<PlaylistSummary>> getPlaylists() async {
+    final body = await _getMiot('/playlists');
+    final items = body['data'] as List<dynamic>? ?? const [];
+    return [
+      for (final raw in items)
+        if (raw is Map<String, dynamic>) PlaylistSummary.fromJson(raw),
+    ];
+  }
+
+  Future<List<MediaItem>> getPlaylistSongs(int playlistId) async {
+    final body = await _getMiot('/playlists/$playlistId/songs');
+    final items = body['data'] as List<dynamic>? ?? const [];
+    return [
+      for (final raw in items)
+        if (raw is Map<String, dynamic>) MediaItem.fromJson(raw),
+    ];
+  }
+
+  Future<void> playPlaylist(
+    SpeakerDevice device,
+    int playlistId, {
+    int startIndex = 0,
+    int? songId,
+  }) =>
+      _postMiot('/player/play', device, {
+        'playlist_id': playlistId,
+        'start_index': startIndex,
+        'play_mode': 'order',
+        if (songId != null) 'song_id': songId,
+      });
+
+  Future<void> previous(SpeakerDevice device) =>
+      _postMiot('/player/previous', device);
+
+  Future<void> next(SpeakerDevice device) =>
+      _postMiot('/player/next', device);
+
+  Future<void> togglePlayback(SpeakerDevice device) =>
+      _postMiot('/player/toggle', device);
 
   Future<void> playUrl(SpeakerDevice device, String url) =>
       _postMiot('/mina/play-url', device, {'url': url});
@@ -101,19 +153,37 @@ class SongloftApi {
       _postMiot('/mina/volume', device, {'volume': volume.clamp(0, 100)});
 
   Future<DeviceStatus> getStatus(SpeakerDevice device) async {
-    await _ensureLogin();
-    final response = await _client.get(
-      _uri('$_miotPrefix/mina/status', {
+    try {
+      final body = await _getMiot('/player/status', {
         'account_id': device.accountId,
         'device_id': device.id,
-      }),
+      });
+      return DeviceStatus.fromJson(
+        (body['data'] as Map?)?.cast<String, dynamic>() ?? const {},
+      );
+    } on SongloftApiException {
+      final body = await _getMiot('/mina/status', {
+        'account_id': device.accountId,
+        'device_id': device.id,
+      });
+      return DeviceStatus.fromJson(
+        (body['data'] as Map?)?.cast<String, dynamic>() ?? const {},
+      );
+    }
+  }
+
+  Future<Map<String, dynamic>> _getMiot(
+    String path, [
+    Map<String, String>? query,
+  ]) async {
+    await _ensureLogin();
+    final response = await _client.get(
+      _uri('$_miotPrefix$path', query),
       headers: _headers,
     );
     final body = _decode(response);
     _ensurePluginSuccess(body);
-    return DeviceStatus.fromJson(
-      (body['data'] as Map?)?.cast<String, dynamic>() ?? const {},
-    );
+    return body;
   }
 
   Future<void> _postMiot(
