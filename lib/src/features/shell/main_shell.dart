@@ -29,6 +29,7 @@ class _MainShellState extends State<MainShell> {
   String? _externalTitle;
   String? _externalSubtitle;
   String? _externalSource;
+  Future<void> Function()? _audiobookNext;
   final _configStore = ConfigStore();
 
   @override
@@ -84,6 +85,7 @@ class _MainShellState extends State<MainShell> {
       _externalTitle = null;
       _externalSubtitle = null;
       _externalSource = null;
+      _audiobookNext = null;
     });
     if (device != null) {
       await _configStore.saveSelectedDevice(device.accountId, device.id);
@@ -131,7 +133,11 @@ class _MainShellState extends State<MainShell> {
     await _control((device) => widget.api.setVolume(device, value.round()));
   }
 
-  void _showAudiobook(AbsBook book, String? chapterTitle) {
+  void _showAudiobook(
+    AbsBook book,
+    String? chapterTitle,
+    Future<void> Function() onNext,
+  ) {
     setState(() {
       _externalTitle = book.title;
       _externalSubtitle = [
@@ -139,6 +145,7 @@ class _MainShellState extends State<MainShell> {
         if (book.subtitle.trim().isNotEmpty) book.subtitle.trim(),
       ].join(' · ');
       _externalSource = 'Audiobookshelf';
+      _audiobookNext = onNext;
     });
     _refreshStatus();
   }
@@ -148,8 +155,32 @@ class _MainShellState extends State<MainShell> {
       _externalTitle = null;
       _externalSubtitle = null;
       _externalSource = null;
+      _audiobookNext = null;
     });
     _refreshStatus();
+  }
+
+  Future<void> _next() async {
+    final audiobookNext = _audiobookNext;
+    if (_externalSource != 'Audiobookshelf' || audiobookNext == null) {
+      await _control(widget.api.next);
+      return;
+    }
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      await audiobookNext();
+      await _refreshStatus();
+    } catch (error) {
+      if (mounted) {
+        setState(() => _diagnostic = error.toString());
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(error.toString())),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   Future<void> _logout() async {
@@ -198,22 +229,19 @@ class _MainShellState extends State<MainShell> {
   Widget build(BuildContext context) {
     final pages = [
       _HomePage(
-        devices: _devices,
         selectedDevice: _selectedDevice,
         status: _status,
         busy: _busy,
         diagnostic: _diagnostic,
-        onDeviceChanged: _selectDevice,
-        onRefresh: _refreshDevices,
+        onRefresh: _refreshStatus,
         onRefreshStatus: _refreshStatus,
         onPrevious: () => _control(widget.api.previous),
         onToggle: () => _control(widget.api.togglePlayback),
-        onNext: () => _control(widget.api.next),
+        onNext: _next,
         onVolumeChanged: _setVolume,
         externalTitle: _externalTitle,
         externalSubtitle: _externalSubtitle,
         externalSource: _externalSource,
-        onOpenDevices: () => setState(() => _index = 3),
         onPlayUrl: _selectedDevice == null
             ? null
             : () => showModalBottomSheet<void>(
@@ -296,12 +324,10 @@ class _MainShellState extends State<MainShell> {
 
 class _HomePage extends StatelessWidget {
   const _HomePage({
-    required this.devices,
     required this.selectedDevice,
     required this.status,
     required this.busy,
     required this.diagnostic,
-    required this.onDeviceChanged,
     required this.onRefresh,
     required this.onRefreshStatus,
     required this.onPrevious,
@@ -311,16 +337,13 @@ class _HomePage extends StatelessWidget {
     required this.externalTitle,
     required this.externalSubtitle,
     required this.externalSource,
-    required this.onOpenDevices,
     required this.onPlayUrl,
   });
 
-  final Future<List<SpeakerDevice>> devices;
   final SpeakerDevice? selectedDevice;
   final DeviceStatus? status;
   final bool busy;
   final String? diagnostic;
-  final ValueChanged<SpeakerDevice?> onDeviceChanged;
   final Future<void> Function() onRefresh;
   final VoidCallback onRefreshStatus;
   final VoidCallback onPrevious;
@@ -330,7 +353,6 @@ class _HomePage extends StatelessWidget {
   final String? externalTitle;
   final String? externalSubtitle;
   final String? externalSource;
-  final VoidCallback onOpenDevices;
   final VoidCallback? onPlayUrl;
 
   String _formatTime(double seconds) {
@@ -351,83 +373,15 @@ class _HomePage extends StatelessWidget {
                 ? status!.playlistName
                 : '选择歌曲或有声书开始播放'));
     return Scaffold(
-      appBar: AppBar(title: const Text('音枢 SonicHub')),
+      appBar: AppBar(
+        automaticallyImplyLeading: false,
+        title: const Text('音枢 SonicHub'),
+      ),
       body: RefreshIndicator(
         onRefresh: onRefresh,
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
-            Text(
-              '智能音箱控制中心',
-              style: Theme.of(context).textTheme.headlineSmall,
-            ),
-            const SizedBox(height: 16),
-            FutureBuilder<List<SpeakerDevice>>(
-              future: devices,
-              builder: (context, snapshot) {
-                if (snapshot.connectionState != ConnectionState.done) {
-                  return const Card(
-                    child: Padding(
-                      padding: EdgeInsets.all(24),
-                      child: Center(child: CircularProgressIndicator()),
-                    ),
-                  );
-                }
-                if (snapshot.hasError) {
-                  return Card(
-                    child: ListTile(
-                      leading: const Icon(Icons.cloud_off),
-                      title: Text(snapshot.error.toString()),
-                      trailing: IconButton(
-                        onPressed: onRefresh,
-                        icon: const Icon(Icons.refresh),
-                      ),
-                    ),
-                  );
-                }
-                final items = snapshot.data ?? const [];
-                if (items.isEmpty) {
-                  return const Card(
-                    child: ListTile(
-                      leading: Icon(Icons.speaker_group_outlined),
-                      title: Text('没有找到可用音箱'),
-                    ),
-                  );
-                }
-                final current = selectedDevice ?? items.first;
-                if (selectedDevice == null) {
-                  WidgetsBinding.instance.addPostFrameCallback(
-                    (_) => onDeviceChanged(current),
-                  );
-                }
-                return Card(
-                  child: InkWell(
-                    onTap: onOpenDevices,
-                    borderRadius: BorderRadius.circular(12),
-                    child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: DropdownButtonFormField<SpeakerDevice>(
-                      key: ValueKey(current.id),
-                      initialValue: current,
-                      decoration: const InputDecoration(
-                        labelText: '当前音箱',
-                        prefixIcon: Icon(Icons.speaker),
-                      ),
-                      items: [
-                        for (final item in items)
-                          DropdownMenuItem(
-                            value: item,
-                            child: Text(item.name),
-                          ),
-                      ],
-                      onChanged: onDeviceChanged,
-                    ),
-                  ),
-                  ),
-                );
-              },
-            ),
-            const SizedBox(height: 12),
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(16),
@@ -849,7 +803,7 @@ class _SettingsPage extends StatelessWidget {
           const SizedBox(height: 24),
           const ListTile(
             title: Text('版本'),
-            subtitle: Text('0.3.1 测试版'),
+            subtitle: Text('0.3.2 测试版'),
           ),
         ],
       ),
