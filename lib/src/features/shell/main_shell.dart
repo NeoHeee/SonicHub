@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -30,11 +32,23 @@ class _MainShellState extends State<MainShell> {
   PlaybackContext? _playback;
   String? _operationMessage;
   final _configStore = ConfigStore();
+  Timer? _statusTimer;
 
   @override
   void initState() {
     super.initState();
     _devices = _loadDevices();
+    _statusTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+      if (mounted && !_busy && _selectedDevice != null) {
+        _refreshStatus(silent: true);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _statusTimer?.cancel();
+    super.dispose();
   }
 
   Future<List<SpeakerDevice>> _loadDevices() async {
@@ -90,19 +104,23 @@ class _MainShellState extends State<MainShell> {
     await _refreshStatus();
   }
 
-  Future<void> _refreshStatus() async {
+  Future<void> _refreshStatus({bool silent = false}) async {
     final device = _selectedDevice;
     if (device == null) return;
-    setState(() {
-      _busy = true;
-      _diagnostic = null;
-    });
+    if (!silent) {
+      setState(() {
+        _busy = true;
+        _diagnostic = null;
+      });
+    }
     try {
       final status = await widget.api.getStatus(device);
       if (mounted) {
         setState(() {
           _status = status;
-          if (_playback == null && status.currentSong != null) {
+          if (status.currentSong != null &&
+              (_playback == null ||
+                  _playback!.source == PlaybackSource.songloft)) {
             _playback = PlaybackContext.songloft(status.currentSong!);
           }
         });
@@ -110,7 +128,7 @@ class _MainShellState extends State<MainShell> {
     } catch (error) {
       if (mounted) setState(() => _diagnostic = error.toString());
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (!silent && mounted) setState(() => _busy = false);
     }
   }
 
@@ -142,7 +160,10 @@ class _MainShellState extends State<MainShell> {
     AbsBook book,
     String? chapterTitle,
     String? coverUrl,
+    double bookPosition,
+    Future<void> Function() onPrevious,
     Future<void> Function() onNext,
+    Future<void> Function(double position) onSeek,
   ) {
     setState(() {
       _playback = PlaybackContext(
@@ -154,9 +175,12 @@ class _MainShellState extends State<MainShell> {
         ].join(' · '),
         coverUrl: coverUrl,
         mediaId: book.id,
+        position: bookPosition,
         duration: book.duration,
         syncMessage: '等待下一次进度同步',
+        onPrevious: onPrevious,
         onNext: onNext,
+        onSeek: onSeek,
       );
       _operationMessage = '已投送到 ${_selectedDevice?.name ?? '当前音箱'}';
     });
@@ -186,17 +210,30 @@ class _MainShellState extends State<MainShell> {
     });
   }
 
+  Future<void> _previous() async {
+    final contextualPrevious = _playback?.onPrevious;
+    if (contextualPrevious == null) {
+      await _control(widget.api.previous);
+      return;
+    }
+    await _runContextAction(contextualPrevious);
+  }
+
   Future<void> _next() async {
     final contextualNext = _playback?.onNext;
     if (contextualNext == null) {
       await _control(widget.api.next);
       return;
     }
+    await _runContextAction(contextualNext);
+  }
+
+  Future<void> _runContextAction(Future<void> Function() action) async {
     if (_busy) return;
     setState(() => _busy = true);
     try {
-      await contextualNext();
-      await _refreshStatus();
+      await action();
+      await _refreshStatus(silent: true);
     } catch (error) {
       if (mounted) {
         setState(() => _diagnostic = error.toString());
@@ -207,6 +244,16 @@ class _MainShellState extends State<MainShell> {
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  Future<void> _seek(double position) async {
+    final contextualSeek = _playback?.onSeek;
+    if (contextualSeek != null) {
+      await _runContextAction(() => contextualSeek(position));
+      return;
+    }
+    if (_playback?.source == PlaybackSource.directUrl) return;
+    await _control((device) => widget.api.seek(device, position));
   }
 
   Future<void> _logout() async {
@@ -261,10 +308,11 @@ class _MainShellState extends State<MainShell> {
         diagnostic: _diagnostic,
         onRefresh: _refreshStatus,
         onRefreshStatus: _refreshStatus,
-        onPrevious: () => _control(widget.api.previous),
+        onPrevious: _previous,
         onToggle: () => _control(widget.api.togglePlayback),
         onNext: _next,
         onVolumeChanged: _setVolume,
+        onSeek: _seek,
         playback: _playback,
         operationMessage: _operationMessage,
         onOpenDevice: () => setState(() => _index = 3),
@@ -363,6 +411,7 @@ class _HomePage extends StatelessWidget {
     required this.onToggle,
     required this.onNext,
     required this.onVolumeChanged,
+    required this.onSeek,
     required this.playback,
     required this.operationMessage,
     required this.onOpenDevice,
@@ -380,6 +429,7 @@ class _HomePage extends StatelessWidget {
   final VoidCallback onToggle;
   final VoidCallback onNext;
   final ValueChanged<double> onVolumeChanged;
+  final ValueChanged<double> onSeek;
   final PlaybackContext? playback;
   final String? operationMessage;
   final VoidCallback onOpenDevice;
@@ -411,8 +461,14 @@ class _HomePage extends StatelessWidget {
                 ? status!.playlistName
                 : '从曲库或有声书中选择内容'));
     final coverUrl = playback?.coverUrl ?? song?.coverUrl;
-    final duration = status?.duration ?? 0;
-    final position = status?.position ?? 0;
+    final statusDuration = status?.duration ?? 0;
+    final statusPosition = status?.position ?? 0;
+    final duration = isAudiobook && (playback?.duration ?? 0) > 0
+        ? playback!.duration
+        : statusDuration;
+    final position = isAudiobook
+        ? ((playback?.position ?? 0) + statusPosition).clamp(0, duration)
+        : statusPosition;
     final progress = duration <= 0 ? 0.0 : (position / duration).clamp(0.0, 1.0);
 
     return Scaffold(
@@ -520,7 +576,17 @@ class _HomePage extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 20),
-                Slider(value: progress, onChanged: null),
+                Slider(
+                  value: position.clamp(0, duration <= 0 ? 1 : duration),
+                  min: 0,
+                  max: duration <= 0 ? 1 : duration,
+                  onChanged: selectedDevice == null || busy || duration <= 0
+                      ? null
+                      : (_) {},
+                  onChangeEnd: selectedDevice == null || busy || duration <= 0
+                      ? null
+                      : onSeek,
+                ),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
