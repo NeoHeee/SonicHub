@@ -1,48 +1,36 @@
 import 'package:flutter/material.dart';
 
 import '../../core/models.dart';
-import '../../core/songloft_api.dart';
-import '../url_player/url_player_sheet.dart';
 
-class SpeakersPage extends StatefulWidget {
-  const SpeakersPage({required this.api, super.key});
-  final SongloftApi api;
+class SpeakersPage extends StatelessWidget {
+  const SpeakersPage({
+    required this.devices,
+    required this.selectedDevice,
+    required this.onSelected,
+    required this.onRefresh,
+    super.key,
+  });
 
-  @override
-  State<SpeakersPage> createState() => _SpeakersPageState();
-}
-
-class _SpeakersPageState extends State<SpeakersPage> {
-  late Future<List<SpeakerDevice>> _devices;
-
-  @override
-  void initState() {
-    super.initState();
-    _reload();
-  }
-
-  void _reload() {
-    final devices = widget.api.getDevices();
-    setState(() {
-      _devices = devices;
-    });
-  }
+  final Future<List<SpeakerDevice>> devices;
+  final SpeakerDevice? selectedDevice;
+  final ValueChanged<SpeakerDevice> onSelected;
+  final Future<void> Function() onRefresh;
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('选择音箱'),
+        title: const Text('设备'),
         actions: [
           IconButton(
-            onPressed: _reload,
+            onPressed: onRefresh,
             tooltip: '刷新设备',
             icon: const Icon(Icons.refresh),
           ),
         ],
       ),
       body: FutureBuilder<List<SpeakerDevice>>(
-        future: _devices,
+        future: devices,
         builder: (context, snapshot) {
           if (snapshot.connectionState != ConnectionState.done) {
             return const Center(child: CircularProgressIndicator());
@@ -51,43 +39,46 @@ class _SpeakersPageState extends State<SpeakersPage> {
             return _Message(
               icon: Icons.cloud_off_outlined,
               text: snapshot.error.toString(),
-              action: _reload,
+              action: onRefresh,
             );
           }
-          final devices = snapshot.data ?? const [];
-          if (devices.isEmpty) {
+          final items = snapshot.data ?? const [];
+          if (items.isEmpty) {
             return _Message(
               icon: Icons.speaker_group_outlined,
               text: '没有找到音箱，请先在 MIoT 插件中添加账号并启用设备。',
-              action: _reload,
+              action: onRefresh,
             );
           }
-          return ListView.separated(
-            padding: const EdgeInsets.all(16),
-            itemCount: devices.length,
-            separatorBuilder: (_, __) => const SizedBox(height: 10),
-            itemBuilder: (context, index) {
-              final device = devices[index];
-              return Card(
-                child: ListTile(
-                  contentPadding: const EdgeInsets.all(14),
-                  leading: const CircleAvatar(
-                    child: Icon(Icons.speaker_rounded),
-                  ),
-                  title: Text(device.name),
-                  subtitle: Text(device.model ?? '智能音箱'),
-                  trailing: const Icon(Icons.chevron_right),
-                  onTap: () => showModalBottomSheet<void>(
-                    context: context,
-                    isScrollControlled: true,
-                    builder: (_) => UrlPlayerSheet(
-                      api: widget.api,
-                      device: device,
+          return RefreshIndicator(
+            onRefresh: onRefresh,
+            child: ListView.separated(
+              padding: const EdgeInsets.all(16),
+              itemCount: items.length,
+              separatorBuilder: (_, __) => const SizedBox(height: 10),
+              itemBuilder: (context, index) {
+                final device = items[index];
+                final selected = device.id == selectedDevice?.id &&
+                    device.accountId == selectedDevice?.accountId;
+                return Card(
+                  color: selected
+                      ? Theme.of(context).colorScheme.primaryContainer
+                      : null,
+                  child: ListTile(
+                    contentPadding: const EdgeInsets.all(14),
+                    leading: CircleAvatar(
+                      child: Icon(selected ? Icons.speaker : Icons.speaker_outlined),
                     ),
+                    title: Text(device.name),
+                    subtitle: Text(device.model ?? '智能音箱'),
+                    trailing: selected
+                        ? const Icon(Icons.check_circle)
+                        : const Icon(Icons.radio_button_unchecked),
+                    onTap: () => onSelected(device),
                   ),
-                ),
-              );
-            },
+                );
+              },
+            ),
           );
         },
       ),
@@ -104,7 +95,7 @@ class _Message extends StatelessWidget {
 
   final IconData icon;
   final String text;
-  final VoidCallback action;
+  final Future<void> Function() action;
 
   @override
   Widget build(BuildContext context) {
