@@ -14,7 +14,10 @@ class AudiobookshelfPage extends StatefulWidget {
     AbsBook book,
     String? chapterTitle,
     String? coverUrl,
+    double bookPosition,
+    Future<void> Function() onPrevious,
     Future<void> Function() onNext,
+    Future<void> Function(double position) onSeek,
   ) onPlayed;
   @override State<AudiobookshelfPage> createState() => _AudiobookshelfPageState();
 }
@@ -120,10 +123,65 @@ class _AudiobookshelfPageState extends State<AudiobookshelfPage> {
         }
       }
       final coverUrl = '${_config!.normalizedBaseUrl}/api/items/${detail.book.id}/cover?token=${Uri.encodeQueryComponent(_config!.apiKey.trim())}';
-      widget.onPlayed(detail.book, chapterTitle, coverUrl, _playNext);
+      widget.onPlayed(
+        detail.book,
+        chapterTitle,
+        coverUrl,
+        playback.bookPosition,
+        _playPrevious,
+        _playNext,
+        _seek,
+      );
       _message(playback.exactTrack ? '已从所选章节对应音轨开始播放' : '已推送音频；单文件 M4B 可能因音箱不支持跳转而从头播放');
     } catch (error) { if (mounted) setState(() => _error = error.toString()); }
     finally { if (mounted) setState(() => _busy = false); }
+  }
+
+  Future<double?> _currentBookPosition() async {
+    final playback = _playback;
+    final device = widget.device;
+    if (playback == null || device == null) return null;
+    var current = playback.bookPosition;
+    try {
+      final status = await widget.songloftApi.getStatus(device);
+      current += status.position;
+    } catch (_) {}
+    return current;
+  }
+
+  Future<void> _playPrevious() async {
+    final detail = _playingBook;
+    final current = await _currentBookPosition();
+    if (detail == null || current == null) return;
+    final chapters = detail.chapters;
+    if (chapters.isEmpty) {
+      _message('这本有声书没有可切换的章节');
+      return;
+    }
+    var index = chapters.lastIndexWhere(
+      (chapter) => current >= chapter.start && current < chapter.end,
+    );
+    if (index < 0) {
+      index = chapters.lastIndexWhere((chapter) => chapter.start <= current);
+    }
+    if (index < 0) index = 0;
+    final currentChapter = chapters[index];
+    final target = current > currentChapter.start + 5
+        ? currentChapter.start
+        : (index > 0 ? chapters[index - 1].start : null);
+    if (target == null) {
+      _message('已经是这本有声书的第一章');
+      return;
+    }
+    await _syncProgress();
+    await _play(position: target);
+  }
+
+  Future<void> _seek(double position) async {
+    final detail = _playingBook;
+    if (detail == null) return;
+    await _syncProgress();
+    await _play(position: position.clamp(0, detail.book.duration));
   }
 
   Future<void> _playNext() async {
