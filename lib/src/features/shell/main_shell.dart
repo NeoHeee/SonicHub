@@ -29,6 +29,7 @@ class _MainShellState extends State<MainShell> {
   String? _externalTitle;
   String? _externalSubtitle;
   String? _externalSource;
+  String? _externalCoverUrl;
   Future<void> Function()? _audiobookNext;
   final _configStore = ConfigStore();
 
@@ -85,6 +86,7 @@ class _MainShellState extends State<MainShell> {
       _externalTitle = null;
       _externalSubtitle = null;
       _externalSource = null;
+      _externalCoverUrl = null;
       _audiobookNext = null;
     });
     if (device != null) {
@@ -136,6 +138,7 @@ class _MainShellState extends State<MainShell> {
   void _showAudiobook(
     AbsBook book,
     String? chapterTitle,
+    String? coverUrl,
     Future<void> Function() onNext,
   ) {
     setState(() {
@@ -145,6 +148,7 @@ class _MainShellState extends State<MainShell> {
         if (book.subtitle.trim().isNotEmpty) book.subtitle.trim(),
       ].join(' · ');
       _externalSource = 'Audiobookshelf';
+      _externalCoverUrl = coverUrl;
       _audiobookNext = onNext;
     });
     _refreshStatus();
@@ -155,6 +159,7 @@ class _MainShellState extends State<MainShell> {
       _externalTitle = null;
       _externalSubtitle = null;
       _externalSource = null;
+      _externalCoverUrl = null;
       _audiobookNext = null;
     });
     _refreshStatus();
@@ -242,6 +247,9 @@ class _MainShellState extends State<MainShell> {
         externalTitle: _externalTitle,
         externalSubtitle: _externalSubtitle,
         externalSource: _externalSource,
+        externalCoverUrl: _externalCoverUrl,
+        onOpenDevice: () => setState(() => _index = 3),
+        onOpenSource: () => setState(() => _index = _externalSource == 'Audiobookshelf' ? 2 : 1),
         onPlayUrl: _selectedDevice == null
             ? null
             : () => showModalBottomSheet<void>(
@@ -337,6 +345,9 @@ class _HomePage extends StatelessWidget {
     required this.externalTitle,
     required this.externalSubtitle,
     required this.externalSource,
+    required this.externalCoverUrl,
+    required this.onOpenDevice,
+    required this.onOpenSource,
     required this.onPlayUrl,
   });
 
@@ -353,147 +364,294 @@ class _HomePage extends StatelessWidget {
   final String? externalTitle;
   final String? externalSubtitle;
   final String? externalSource;
+  final String? externalCoverUrl;
+  final VoidCallback onOpenDevice;
+  final VoidCallback onOpenSource;
   final VoidCallback? onPlayUrl;
 
   String _formatTime(double seconds) {
     final value = seconds.round().clamp(0, 999999);
-    final minutes = value ~/ 60;
+    final hours = value ~/ 3600;
+    final minutes = (value % 3600) ~/ 60;
     final remaining = value % 60;
-    return '$minutes:${remaining.toString().padLeft(2, '0')}';
+    return hours > 0
+        ? '$hours:${minutes.toString().padLeft(2, '0')}:${remaining.toString().padLeft(2, '0')}'
+        : '$minutes:${remaining.toString().padLeft(2, '0')}';
   }
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     final song = status?.currentSong;
+    final isAudiobook = externalSource == 'Audiobookshelf';
     final title = externalTitle ?? song?.title ?? '暂无播放内容';
     final subtitle = externalSubtitle ??
         (song?.subtitle.isNotEmpty == true
             ? song!.subtitle
             : (status?.playlistName.isNotEmpty == true
                 ? status!.playlistName
-                : '选择歌曲或有声书开始播放'));
+                : '从曲库或有声书中选择内容'));
+    final coverUrl = isAudiobook ? externalCoverUrl : song?.coverUrl;
+    final duration = status?.duration ?? 0;
+    final position = status?.position ?? 0;
+    final progress = duration <= 0 ? 0.0 : (position / duration).clamp(0.0, 1.0);
+
     return Scaffold(
-      appBar: AppBar(
-        automaticallyImplyLeading: false,
-        title: const Text('音枢 SonicHub'),
-      ),
       body: RefreshIndicator(
         onRefresh: onRefresh,
-        child: ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
+        child: Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [
+                scheme.primaryContainer.withValues(alpha: 0.82),
+                scheme.surface,
+                scheme.surface,
+              ],
+              stops: const [0, 0.55, 1],
+            ),
+          ),
+          child: SafeArea(
+            bottom: false,
+            child: ListView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: const EdgeInsets.fromLTRB(24, 10, 24, 28),
+              children: [
+                Row(
                   children: [
-                    ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      leading: CircleAvatar(
-                        radius: 28,
-                        child: Icon(externalSource == null
-                            ? Icons.music_note
-                            : Icons.auto_stories),
-                      ),
-                      title: Text(
-                        title,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontWeight: FontWeight.w600),
-                      ),
-                      subtitle: Text(
-                        [if (externalSource != null) externalSource!, subtitle]
-                            .join(' · '),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      trailing: IconButton(
-                        onPressed: selectedDevice == null || busy
-                            ? null
-                            : onRefreshStatus,
-                        icon: const Icon(Icons.refresh),
+                    Expanded(
+                      child: Text(
+                        isAudiobook ? '正在收听' : '正在播放',
+                        style: Theme.of(context).textTheme.titleMedium,
                       ),
                     ),
-                    if (status != null && status!.duration > 0) ...[
-                      LinearProgressIndicator(
-                        value: (status!.position / status!.duration)
-                            .clamp(0.0, 1.0),
-                      ),
-                      const SizedBox(height: 4),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(_formatTime(status!.position)),
-                          Text(_formatTime(status!.duration)),
-                        ],
-                      ),
-                    ],
-                    const SizedBox(height: 12),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                      children: [
-                        IconButton.filledTonal(
-                          onPressed: selectedDevice == null || busy
-                              ? null
-                              : onPrevious,
-                          icon: const Icon(Icons.skip_previous),
-                        ),
-                        IconButton.filled(
-                          onPressed: selectedDevice == null || busy
-                              ? null
-                              : onToggle,
-                          icon: Icon(
-                            status?.state == 'playing'
-                                ? Icons.pause
-                                : Icons.play_arrow,
-                          ),
-                        ),
-                        IconButton.filledTonal(
-                          onPressed:
-                              selectedDevice == null || busy ? null : onNext,
-                          icon: const Icon(Icons.skip_next),
-                        ),
-                      ],
+                    IconButton(
+                      tooltip: '刷新播放状态',
+                      onPressed: selectedDevice == null || busy ? null : onRefreshStatus,
+                      icon: const Icon(Icons.refresh),
                     ),
-                    if (status?.volume != null)
-                      Row(
-                        children: [
-                          const Icon(Icons.volume_down),
-                          Expanded(
-                            child: Slider(
-                              value: status!.volume!.toDouble().clamp(0, 100),
-                              min: 0,
-                              max: 100,
-                              divisions: 20,
-                              label: '${status!.volume}%',
-                              onChanged: busy ? null : onVolumeChanged,
-                            ),
-                          ),
-                          Text('${status!.volume}%'),
-                        ],
-                      ),
-                    if (busy) const LinearProgressIndicator(),
+                    IconButton(
+                      tooltip: '当前设备',
+                      onPressed: onOpenDevice,
+                      icon: const Icon(Icons.speaker_outlined),
+                    ),
                   ],
                 ),
-              ),
-            ),
-            if (diagnostic != null) ...[
-              const SizedBox(height: 12),
-              Text(
-                diagnostic!,
-                style: TextStyle(
-                  color: Theme.of(context).colorScheme.error,
+                const SizedBox(height: 20),
+                Center(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 360),
+                    child: AspectRatio(
+                      aspectRatio: isAudiobook ? 0.78 : 1,
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(28),
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            color: scheme.surfaceContainerHighest,
+                            boxShadow: const [
+                              BoxShadow(
+                                blurRadius: 30,
+                                offset: Offset(0, 16),
+                                color: Color(0x33000000),
+                              ),
+                            ],
+                          ),
+                          child: coverUrl?.trim().isNotEmpty == true
+                              ? Image.network(
+                                  coverUrl!,
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (_, __, ___) => _ArtworkFallback(isAudiobook: isAudiobook),
+                                )
+                              : _ArtworkFallback(isAudiobook: isAudiobook),
+                        ),
+                      ),
+                    ),
+                  ),
                 ),
-              ),
-            ],
-            const SizedBox(height: 12),
-            FilledButton.icon(
-              onPressed: onPlayUrl,
-              icon: const Icon(Icons.cast),
-              label: const Text('推送音频直链'),
+                const SizedBox(height: 30),
+                Text(
+                  title,
+                  textAlign: TextAlign.center,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  subtitle,
+                  textAlign: TextAlign.center,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                      ),
+                ),
+                const SizedBox(height: 10),
+                Center(
+                  child: Chip(
+                    avatar: Icon(
+                      isAudiobook ? Icons.auto_stories : Icons.library_music,
+                      size: 18,
+                    ),
+                    label: Text(isAudiobook ? 'Audiobookshelf · 有声书' : 'Songloft · 音乐'),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ),
+                const SizedBox(height: 20),
+                Slider(value: progress, onChanged: null),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(_formatTime(position)),
+                    Text(_formatTime(duration)),
+                  ],
+                ),
+                if (isAudiobook) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    '章节播放 · 进度自动回传',
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.labelMedium,
+                  ),
+                ],
+                const SizedBox(height: 18),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    IconButton(
+                      tooltip: isAudiobook ? '上一章' : '上一首',
+                      iconSize: 38,
+                      onPressed: selectedDevice == null || busy ? null : onPrevious,
+                      icon: const Icon(Icons.skip_previous_rounded),
+                    ),
+                    SizedBox(
+                      width: 76,
+                      height: 76,
+                      child: IconButton.filled(
+                        tooltip: status?.state == 'playing' ? '暂停' : '播放',
+                        onPressed: selectedDevice == null || busy ? null : onToggle,
+                        iconSize: 42,
+                        icon: Icon(
+                          status?.state == 'playing'
+                              ? Icons.pause_rounded
+                              : Icons.play_arrow_rounded,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: isAudiobook ? '下一章' : '下一首',
+                      iconSize: 38,
+                      onPressed: selectedDevice == null || busy ? null : onNext,
+                      icon: const Icon(Icons.skip_next_rounded),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                if (status?.volume != null)
+                  Row(
+                    children: [
+                      const Icon(Icons.volume_down),
+                      Expanded(
+                        child: Slider(
+                          value: status!.volume!.toDouble().clamp(0, 100),
+                          min: 0,
+                          max: 100,
+                          divisions: 20,
+                          label: '${status!.volume}%',
+                          onChanged: busy ? null : onVolumeChanged,
+                        ),
+                      ),
+                      Text('${status!.volume}%'),
+                    ],
+                  ),
+                const SizedBox(height: 6),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    _PlayerAction(
+                      icon: isAudiobook ? Icons.list_alt : Icons.queue_music,
+                      label: isAudiobook ? '章节' : '队列',
+                      onTap: onOpenSource,
+                    ),
+                    _PlayerAction(
+                      icon: Icons.cast,
+                      label: '直链',
+                      onTap: onPlayUrl,
+                    ),
+                    _PlayerAction(
+                      icon: Icons.speaker,
+                      label: '设备',
+                      onTap: onOpenDevice,
+                    ),
+                  ],
+                ),
+                if (busy) ...[
+                  const SizedBox(height: 16),
+                  const LinearProgressIndicator(),
+                ],
+                if (diagnostic != null) ...[
+                  const SizedBox(height: 16),
+                  Text(
+                    diagnostic!,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: scheme.error),
+                  ),
+                ],
+              ],
             ),
-          ],
+          ),
         ),
+      ),
+    );
+  }
+}
+
+class _ArtworkFallback extends StatelessWidget {
+  const _ArtworkFallback({required this.isAudiobook});
+  final bool isAudiobook;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [scheme.primary, scheme.tertiary],
+        ),
+      ),
+      child: Center(
+        child: Icon(
+          isAudiobook ? Icons.auto_stories_rounded : Icons.graphic_eq_rounded,
+          size: 104,
+          color: scheme.onPrimary,
+        ),
+      ),
+    );
+  }
+}
+
+class _PlayerAction extends StatelessWidget {
+  const _PlayerAction({required this.icon, required this.label, this.onTap});
+  final IconData icon;
+  final String label;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return TextButton(
+      onPressed: onTap,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon),
+          const SizedBox(height: 4),
+          Text(label),
+        ],
       ),
     );
   }
