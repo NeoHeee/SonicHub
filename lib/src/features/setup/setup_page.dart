@@ -48,7 +48,7 @@ class _SetupPageState extends State<SetupPage> {
       _message = null;
     });
     final config = ServerConfig(
-      baseUrl: _url.text,
+      baseUrl: ServerConfig.normalizeBaseUrl(_url.text),
       username: _username.text.trim(),
       password: _password.text,
     );
@@ -111,7 +111,9 @@ class _SetupPageState extends State<SetupPage> {
                         prefixIcon: Icon(Icons.dns_outlined),
                       ),
                       validator: (value) {
-                        final uri = Uri.tryParse(value?.trim() ?? '');
+                        final uri = Uri.tryParse(
+                          ServerConfig.normalizeBaseUrl(value ?? ''),
+                        );
                         return uri != null &&
                                 (uri.scheme == 'http' || uri.scheme == 'https') &&
                                 uri.host.isNotEmpty
