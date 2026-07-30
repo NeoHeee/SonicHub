@@ -133,7 +133,15 @@ class _AudiobookshelfPageState extends State<AudiobookshelfPage> {
 
   @override Widget build(BuildContext context) {
     if (_config == null) return _buildSetup();
-    if (_detail != null) return _buildDetail(_detail!);
+    if (_detail != null) {
+      return PopScope(
+        canPop: false,
+        onPopInvokedWithResult: (didPop, result) {
+          if (!didPop) setState(() => _detail = null);
+        },
+        child: _buildDetail(_detail!),
+      );
+    }
     return _buildLibrary();
   }
 
