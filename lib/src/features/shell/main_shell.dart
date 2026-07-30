@@ -466,10 +466,9 @@ class _HomePage extends StatelessWidget {
     final duration = isAudiobook && (playback?.duration ?? 0) > 0
         ? playback!.duration
         : statusDuration;
-    final position = isAudiobook
+    final position = (isAudiobook
         ? ((playback?.position ?? 0) + statusPosition).clamp(0, duration)
-        : statusPosition;
-    final progress = duration <= 0 ? 0.0 : (position / duration).clamp(0.0, 1.0);
+        : statusPosition).toDouble();
 
     return Scaffold(
       body: RefreshIndicator(
