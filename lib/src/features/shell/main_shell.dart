@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/models.dart';
+import '../audiobookshelf/audiobookshelf_page.dart';
 import '../../core/server_config.dart';
 import '../../core/songloft_api.dart';
 import '../speakers/speakers_page.dart';
@@ -144,6 +145,11 @@ class _MainShellState extends State<MainShell> {
         device: _selectedDevice,
         onPlayed: _refreshStatus,
       ),
+      AudiobookshelfPage(
+        songloftApi: widget.api,
+        device: _selectedDevice,
+        onPlayed: _refreshStatus,
+      ),
       SpeakersPage(api: widget.api),
       _SettingsPage(
         config: widget.config,
@@ -166,6 +172,11 @@ class _MainShellState extends State<MainShell> {
             label: '首页',
           ),
           NavigationDestination(icon: Icon(Icons.search), label: '搜索'),
+          NavigationDestination(
+            icon: Icon(Icons.auto_stories_outlined),
+            selectedIcon: Icon(Icons.auto_stories),
+            label: '有声书',
+          ),
           NavigationDestination(
             icon: Icon(Icons.speaker_outlined),
             selectedIcon: Icon(Icons.speaker),
@@ -667,7 +678,7 @@ class _SettingsPage extends StatelessWidget {
           const SizedBox(height: 24),
           const ListTile(
             title: Text('版本'),
-            subtitle: Text('0.2.0 测试版'),
+            subtitle: Text('0.3.0 测试版'),
           ),
         ],
       ),
