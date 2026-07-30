@@ -11,6 +11,15 @@ class SpeakerDevice {
   final String name;
   final String? model;
 
+  bool get isLocal => accountId == '__local__' && id == '__local__';
+
+  static const local = SpeakerDevice(
+    accountId: '__local__',
+    id: '__local__',
+    name: '本机播放',
+    model: '当前设备',
+  );
+
   factory SpeakerDevice.fromJson(Map<String, dynamic> json, String accountId) {
     return SpeakerDevice(
       accountId: accountId,

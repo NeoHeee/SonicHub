@@ -2,9 +2,11 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:just_audio/just_audio.dart';
 
 import '../../core/audiobookshelf_api.dart';
 import '../../core/config_store.dart';
+import '../../core/local_audio_player.dart';
 import '../../core/models.dart';
 import '../../core/playback_context.dart';
 import '../audiobookshelf/audiobookshelf_page.dart';
@@ -33,11 +35,18 @@ class _MainShellState extends State<MainShell> {
   String? _operationMessage;
   final _configStore = ConfigStore();
   Timer? _statusTimer;
+  final _localPlayer = LocalAudioPlayer();
+  StreamSubscription<Duration>? _localPositionSubscription;
+  StreamSubscription<Duration?>? _localDurationSubscription;
+  StreamSubscription<PlayerState>? _localStateSubscription;
 
   @override
   void initState() {
     super.initState();
     _devices = _loadDevices();
+    _localPositionSubscription = _localPlayer.positionStream.listen((_) => _updateLocalStatus());
+    _localDurationSubscription = _localPlayer.durationStream.listen((_) => _updateLocalStatus());
+    _localStateSubscription = _localPlayer.playerStateStream.listen((_) => _updateLocalStatus());
     _statusTimer = Timer.periodic(const Duration(seconds: 2), (_) {
       if (mounted && !_busy && _selectedDevice != null) {
         _refreshStatus(silent: true);
@@ -48,6 +57,10 @@ class _MainShellState extends State<MainShell> {
   @override
   void dispose() {
     _statusTimer?.cancel();
+    _localPositionSubscription?.cancel();
+    _localDurationSubscription?.cancel();
+    _localStateSubscription?.cancel();
+    _localPlayer.dispose();
     super.dispose();
   }
 
@@ -75,17 +88,18 @@ class _MainShellState extends State<MainShell> {
     try {
       final devices = await future;
       if (!mounted) return;
-      final selectedId = _selectedDevice?.id;
-      final selectedAccountId = _selectedDevice?.accountId;
+      final previous = _selectedDevice;
       setState(() {
-        _selectedDevice = devices.isEmpty
-            ? null
-            : devices.firstWhere(
-                (item) =>
-                    item.id == selectedId &&
-                    item.accountId == selectedAccountId,
-                orElse: () => devices.first,
-              );
+        if (previous?.isLocal == true) {
+          _selectedDevice = SpeakerDevice.local;
+        } else if (devices.isNotEmpty) {
+          _selectedDevice = devices.firstWhere(
+            (item) => item.id == previous?.id && item.accountId == previous?.accountId,
+            orElse: () => devices.first,
+          );
+        } else {
+          _selectedDevice = null;
+        }
       });
       await _refreshStatus();
     } catch (_) {}
@@ -98,7 +112,7 @@ class _MainShellState extends State<MainShell> {
       _playback = null;
       _operationMessage = '已切换到 ${device?.name ?? '未选择设备'}';
     });
-    if (device != null) {
+    if (device != null && !device.isLocal) {
       await _configStore.saveSelectedDevice(device.accountId, device.id);
     }
     await _refreshStatus();
@@ -107,6 +121,10 @@ class _MainShellState extends State<MainShell> {
   Future<void> _refreshStatus({bool silent = false}) async {
     final device = _selectedDevice;
     if (device == null) return;
+    if (device.isLocal) {
+      _updateLocalStatus();
+      return;
+    }
     if (!silent) {
       setState(() {
         _busy = true;
@@ -130,6 +148,88 @@ class _MainShellState extends State<MainShell> {
     } finally {
       if (!silent && mounted) setState(() => _busy = false);
     }
+  }
+
+  void _updateLocalStatus() {
+    if (!mounted || _selectedDevice?.isLocal != true) return;
+    setState(() {
+      _status = DeviceStatus(
+        state: _localPlayer.isPlaying ? 'playing' : 'paused',
+        volume: null,
+        position: _localPlayer.position,
+        duration: _localPlayer.duration,
+        currentIndex: -1,
+        playlistId: 0,
+        playlistName: '本机播放',
+        currentSong: null,
+      );
+    });
+  }
+
+  Future<void> _playLocal(MediaItem song) async {
+    if (song.playUrl.trim().isEmpty) {
+      setState(() => _diagnostic = '这首歌曲没有可用的播放地址');
+      return;
+    }
+    setState(() => _busy = true);
+    try {
+      await _localPlayer.playUrl(song.playUrl);
+      if (mounted) {
+        setState(() {
+          _playback = PlaybackContext.local(
+            title: song.title,
+            subtitle: song.subtitle,
+            coverUrl: song.coverUrl,
+            mediaId: '${song.id}',
+            duration: song.duration,
+          );
+          _operationMessage = '正在本机播放';
+        });
+        _updateLocalStatus();
+      }
+    } catch (error) {
+      if (mounted) setState(() => _diagnostic = '本机播放失败：$error');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _playLocalUrl(String url) async {
+    setState(() => _busy = true);
+    try {
+      await _localPlayer.playUrl(url);
+      if (mounted) {
+        final uri = Uri.parse(url);
+        setState(() {
+          _playback = PlaybackContext.local(
+            title: uri.pathSegments.isEmpty || uri.pathSegments.last.isEmpty
+                ? '音频直链'
+                : Uri.decodeComponent(uri.pathSegments.last),
+            subtitle: uri.host,
+            mediaId: url,
+          );
+          _operationMessage = '正在本机播放';
+        });
+        _updateLocalStatus();
+      }
+    } catch (error) {
+      if (mounted) setState(() => _diagnostic = '本机播放失败：$error');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _togglePlayback() async {
+    if (_selectedDevice?.isLocal == true) {
+      if (_localPlayer.isPlaying) {
+        await _localPlayer.pause();
+      } else {
+        await _localPlayer.resume();
+      }
+      _updateLocalStatus();
+      return;
+    }
+    await _control(widget.api.togglePlayback);
   }
 
   Future<void> _control(Future<void> Function(SpeakerDevice) action) async {
@@ -211,6 +311,10 @@ class _MainShellState extends State<MainShell> {
   }
 
   Future<void> _previous() async {
+    if (_selectedDevice?.isLocal == true) {
+      setState(() => _operationMessage = '本机播放暂不支持切换队列');
+      return;
+    }
     final contextualPrevious = _playback?.onPrevious;
     if (contextualPrevious == null) {
       await _control(widget.api.previous);
@@ -220,6 +324,10 @@ class _MainShellState extends State<MainShell> {
   }
 
   Future<void> _next() async {
+    if (_selectedDevice?.isLocal == true) {
+      setState(() => _operationMessage = '本机播放暂不支持切换队列');
+      return;
+    }
     final contextualNext = _playback?.onNext;
     if (contextualNext == null) {
       await _control(widget.api.next);
@@ -247,6 +355,11 @@ class _MainShellState extends State<MainShell> {
   }
 
   Future<void> _seek(double position) async {
+    if (_selectedDevice?.isLocal == true) {
+      await _localPlayer.seek(position);
+      _updateLocalStatus();
+      return;
+    }
     final contextualSeek = _playback?.onSeek;
     if (contextualSeek != null) {
       await _runContextAction(() => contextualSeek(position));
@@ -309,7 +422,7 @@ class _MainShellState extends State<MainShell> {
         onRefresh: _refreshStatus,
         onRefreshStatus: _refreshStatus,
         onPrevious: _previous,
-        onToggle: () => _control(widget.api.togglePlayback),
+        onToggle: _togglePlayback,
         onNext: _next,
         onVolumeChanged: _setVolume,
         onSeek: _seek,
@@ -326,6 +439,8 @@ class _MainShellState extends State<MainShell> {
                     api: widget.api,
                     device: _selectedDevice!,
                     onPlayed: _showDirectUrl,
+                    localPlayer: _selectedDevice!.isLocal ? _localPlayer : null,
+                    onLocalPlayed: _playLocalUrl,
                   ),
                 ).then((_) => _refreshStatus()),
       ),
@@ -333,6 +448,7 @@ class _MainShellState extends State<MainShell> {
         api: widget.api,
         device: _selectedDevice,
         onPlayed: _clearExternalPlayback,
+        onPlayLocal: _playLocal,
         onOpenAudiobook: () => setState(() => _index = 2),
         onOpenDirectUrl: _selectedDevice == null
             ? null
@@ -343,6 +459,8 @@ class _MainShellState extends State<MainShell> {
                     api: widget.api,
                     device: _selectedDevice!,
                     onPlayed: _showDirectUrl,
+                    localPlayer: _selectedDevice!.isLocal ? _localPlayer : null,
+                    onLocalPlayed: _playLocalUrl,
                   ),
                 ).then((_) => _refreshStatus()),
       ),
@@ -350,6 +468,8 @@ class _MainShellState extends State<MainShell> {
         songloftApi: widget.api,
         device: _selectedDevice,
         onPlayed: _showAudiobook,
+        onLocalPlayed: _playLocalUrl,
+        localPosition: () async => _localPlayer.position,
       ),
       SpeakersPage(
         api: widget.api,
@@ -810,6 +930,7 @@ class _LibraryPage extends StatefulWidget {
     required this.api,
     required this.device,
     required this.onPlayed,
+    required this.onPlayLocal,
     required this.onOpenAudiobook,
     required this.onOpenDirectUrl,
   });
@@ -817,6 +938,7 @@ class _LibraryPage extends StatefulWidget {
   final SongloftApi api;
   final SpeakerDevice? device;
   final VoidCallback onPlayed;
+  final Future<void> Function(MediaItem song) onPlayLocal;
   final VoidCallback onOpenAudiobook;
   final VoidCallback? onOpenDirectUrl;
 
@@ -872,13 +994,17 @@ class _LibraryPageState extends State<_LibraryPage> {
     }
     setState(() => _busy = true);
     try {
-      await widget.api.playPlaylist(
-        device,
-        playlist.id,
-        startIndex: index,
-        songId: song.id,
-      );
-      widget.onPlayed();
+      if (device.isLocal) {
+        await widget.onPlayLocal(song);
+      } else {
+        await widget.api.playPlaylist(
+          device,
+          playlist.id,
+          startIndex: index,
+          songId: song.id,
+        );
+        widget.onPlayed();
+      }
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('正在播放：${song.title}')),

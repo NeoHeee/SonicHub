@@ -1,7 +1,7 @@
 name: sonichub
 description: 音枢 SonicHub - 多音源智能音箱控制中心
 publish_to: none
-version: 0.6.0+10
+version: 0.6.1+11
 
 environment:
   sdk: ">=3.4.0 <4.0.0"
@@ -12,6 +12,7 @@ dependencies:
   cupertino_icons: ^1.0.8
   http: ^1.2.2
   flutter_secure_storage: ^9.2.4
+  just_audio: ^0.10.4
 
 dev_dependencies:
   flutter_test:

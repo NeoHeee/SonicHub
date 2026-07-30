@@ -7,7 +7,7 @@ import '../../core/models.dart';
 import '../../core/songloft_api.dart';
 
 class AudiobookshelfPage extends StatefulWidget {
-  const AudiobookshelfPage({required this.songloftApi, required this.device, required this.onPlayed, super.key});
+  const AudiobookshelfPage({required this.songloftApi, required this.device, required this.onPlayed, this.onLocalPlayed, this.localPosition, super.key});
   final SongloftApi songloftApi;
   final SpeakerDevice? device;
   final void Function(
@@ -19,6 +19,8 @@ class AudiobookshelfPage extends StatefulWidget {
     Future<void> Function() onNext,
     Future<void> Function(double position) onSeek,
   ) onPlayed;
+  final Future<void> Function(String url)? onLocalPlayed;
+  final Future<double> Function()? localPosition;
   @override State<AudiobookshelfPage> createState() => _AudiobookshelfPageState();
 }
 
@@ -109,7 +111,11 @@ class _AudiobookshelfPageState extends State<AudiobookshelfPage> {
     setState(() { _busy = true; _error = null; });
     try {
       final playback = await _api!.createPlayback(detail, position: position);
-      await widget.songloftApi.playUrl(device, playback.url);
+      if (device.isLocal) {
+        await widget.onLocalPlayed?.call(playback.url);
+      } else {
+        await widget.songloftApi.playUrl(device, playback.url);
+      }
       _playingBook = detail; _playback = playback;
       setState(() => _syncState = '等待进度同步');
       _progressTimer?.cancel();
@@ -143,8 +149,9 @@ class _AudiobookshelfPageState extends State<AudiobookshelfPage> {
     if (playback == null || device == null) return null;
     var current = playback.bookPosition;
     try {
-      final status = await widget.songloftApi.getStatus(device);
-      current += status.position;
+      current += device.isLocal
+          ? await widget.localPosition?.call() ?? 0
+          : (await widget.songloftApi.getStatus(device)).position;
     } catch (_) {}
     return current;
   }
@@ -192,8 +199,9 @@ class _AudiobookshelfPageState extends State<AudiobookshelfPage> {
 
     var current = playback.bookPosition;
     try {
-      final status = await widget.songloftApi.getStatus(device);
-      current += status.position;
+      current += device.isLocal
+          ? await widget.localPosition?.call() ?? 0
+          : (await widget.songloftApi.getStatus(device)).position;
     } catch (_) {}
 
     double? nextPosition;
@@ -233,8 +241,9 @@ class _AudiobookshelfPageState extends State<AudiobookshelfPage> {
     final api = _api; final detail = _playingBook; final playback = _playback; final device = widget.device;
     if (api == null || detail == null || playback == null || device == null) return;
     try {
-      final status = await widget.songloftApi.getStatus(device);
-      final current = playback.bookPosition + status.position;
+      final current = playback.bookPosition + (device.isLocal
+          ? await widget.localPosition?.call() ?? 0
+          : (await widget.songloftApi.getStatus(device)).position);
       await api.updateProgress(detail.book.id, currentTime: current.clamp(0, playback.duration), duration: playback.duration, isFinished: playback.duration > 0 && current >= playback.duration - 10);
       if (mounted) setState(() => _syncState = '进度已同步');
     } catch (_) {

@@ -3,6 +3,11 @@ import 'package:sonichub/src/core/models.dart';
 import 'package:sonichub/src/core/server_config.dart';
 
 void main() {
+  test('local playback device is identified without a Songloft account', () {
+    expect(SpeakerDevice.local.isLocal, isTrue);
+    expect(SpeakerDevice.local.name, '本机播放');
+  });
+
   test('parses MIoT device using upstream field names', () {
     final device = SpeakerDevice.fromJson(
       {
