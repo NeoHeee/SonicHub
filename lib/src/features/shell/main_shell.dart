@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import '../../core/audiobookshelf_api.dart';
 import '../../core/config_store.dart';
 import '../../core/models.dart';
+import '../../core/playback_context.dart';
 import '../audiobookshelf/audiobookshelf_page.dart';
 import '../../core/server_config.dart';
 import '../../core/songloft_api.dart';
@@ -26,11 +27,8 @@ class _MainShellState extends State<MainShell> {
   DeviceStatus? _status;
   String? _diagnostic;
   bool _busy = false;
-  String? _externalTitle;
-  String? _externalSubtitle;
-  String? _externalSource;
-  String? _externalCoverUrl;
-  Future<void> Function()? _audiobookNext;
+  PlaybackContext? _playback;
+  String? _operationMessage;
   final _configStore = ConfigStore();
 
   @override
@@ -83,11 +81,8 @@ class _MainShellState extends State<MainShell> {
     setState(() {
       _selectedDevice = device;
       _status = null;
-      _externalTitle = null;
-      _externalSubtitle = null;
-      _externalSource = null;
-      _externalCoverUrl = null;
-      _audiobookNext = null;
+      _playback = null;
+      _operationMessage = '已切换到 ${device?.name ?? '未选择设备'}';
     });
     if (device != null) {
       await _configStore.saveSelectedDevice(device.accountId, device.id);
@@ -104,7 +99,14 @@ class _MainShellState extends State<MainShell> {
     });
     try {
       final status = await widget.api.getStatus(device);
-      if (mounted) setState(() => _status = status);
+      if (mounted) {
+        setState(() {
+          _status = status;
+          if (_playback == null && status.currentSong != null) {
+            _playback = PlaybackContext.songloft(status.currentSong!);
+          }
+        });
+      }
     } catch (error) {
       if (mounted) setState(() => _diagnostic = error.toString());
     } finally {
@@ -118,6 +120,7 @@ class _MainShellState extends State<MainShell> {
     setState(() => _busy = true);
     try {
       await action(device);
+      if (mounted) setState(() => _operationMessage = '操作已发送到 ${device.name}');
       await _refreshStatus();
     } catch (error) {
       if (mounted) {
@@ -142,39 +145,57 @@ class _MainShellState extends State<MainShell> {
     Future<void> Function() onNext,
   ) {
     setState(() {
-      _externalTitle = book.title;
-      _externalSubtitle = [
-        if (chapterTitle?.trim().isNotEmpty == true) chapterTitle!.trim(),
-        if (book.subtitle.trim().isNotEmpty) book.subtitle.trim(),
-      ].join(' · ');
-      _externalSource = 'Audiobookshelf';
-      _externalCoverUrl = coverUrl;
-      _audiobookNext = onNext;
+      _playback = PlaybackContext(
+        source: PlaybackSource.audiobookshelf,
+        title: book.title,
+        subtitle: [
+          if (chapterTitle?.trim().isNotEmpty == true) chapterTitle!.trim(),
+          if (book.subtitle.trim().isNotEmpty) book.subtitle.trim(),
+        ].join(' · '),
+        coverUrl: coverUrl,
+        mediaId: book.id,
+        duration: book.duration,
+        syncMessage: '等待下一次进度同步',
+        onNext: onNext,
+      );
+      _operationMessage = '已投送到 ${_selectedDevice?.name ?? '当前音箱'}';
     });
     _refreshStatus();
   }
 
   void _clearExternalPlayback() {
     setState(() {
-      _externalTitle = null;
-      _externalSubtitle = null;
-      _externalSource = null;
-      _externalCoverUrl = null;
-      _audiobookNext = null;
+      _playback = null;
+      _operationMessage = '正在读取 Songloft 播放状态';
     });
     _refreshStatus();
   }
 
+  void _showDirectUrl(String url) {
+    final uri = Uri.parse(url);
+    setState(() {
+      _playback = PlaybackContext(
+        source: PlaybackSource.directUrl,
+        title: uri.pathSegments.isEmpty || uri.pathSegments.last.isEmpty
+            ? '音频直链'
+            : Uri.decodeComponent(uri.pathSegments.last),
+        subtitle: uri.host,
+        mediaId: url,
+      );
+      _operationMessage = '直链已投送到 ${_selectedDevice?.name ?? '当前音箱'}';
+    });
+  }
+
   Future<void> _next() async {
-    final audiobookNext = _audiobookNext;
-    if (_externalSource != 'Audiobookshelf' || audiobookNext == null) {
+    final contextualNext = _playback?.onNext;
+    if (contextualNext == null) {
       await _control(widget.api.next);
       return;
     }
     if (_busy) return;
     setState(() => _busy = true);
     try {
-      await audiobookNext();
+      await contextualNext();
       await _refreshStatus();
     } catch (error) {
       if (mounted) {
@@ -244,12 +265,10 @@ class _MainShellState extends State<MainShell> {
         onToggle: () => _control(widget.api.togglePlayback),
         onNext: _next,
         onVolumeChanged: _setVolume,
-        externalTitle: _externalTitle,
-        externalSubtitle: _externalSubtitle,
-        externalSource: _externalSource,
-        externalCoverUrl: _externalCoverUrl,
+        playback: _playback,
+        operationMessage: _operationMessage,
         onOpenDevice: () => setState(() => _index = 3),
-        onOpenSource: () => setState(() => _index = _externalSource == 'Audiobookshelf' ? 2 : 1),
+        onOpenSource: () => setState(() => _index = _playback?.isAudiobook == true ? 2 : 1),
         onPlayUrl: _selectedDevice == null
             ? null
             : () => showModalBottomSheet<void>(
@@ -258,8 +277,9 @@ class _MainShellState extends State<MainShell> {
                   builder: (_) => UrlPlayerSheet(
                     api: widget.api,
                     device: _selectedDevice!,
+                    onPlayed: _showDirectUrl,
                   ),
-                ).then((_) => _clearExternalPlayback()),
+                ).then((_) => _refreshStatus()),
       ),
       _LibraryPage(
         api: widget.api,
@@ -272,6 +292,7 @@ class _MainShellState extends State<MainShell> {
         onPlayed: _showAudiobook,
       ),
       SpeakersPage(
+        api: widget.api,
         devices: _devices,
         selectedDevice: _selectedDevice,
         onSelected: _selectDevice,
@@ -305,9 +326,9 @@ class _MainShellState extends State<MainShell> {
           NavigationDestination(
             icon: Icon(Icons.home_outlined),
             selectedIcon: Icon(Icons.home),
-            label: '首页',
+            label: '播放',
           ),
-          NavigationDestination(icon: Icon(Icons.search), label: '搜索'),
+          NavigationDestination(icon: Icon(Icons.library_music_outlined), selectedIcon: Icon(Icons.library_music), label: '音乐'),
           NavigationDestination(
             icon: Icon(Icons.auto_stories_outlined),
             selectedIcon: Icon(Icons.auto_stories),
@@ -321,7 +342,7 @@ class _MainShellState extends State<MainShell> {
           NavigationDestination(
             icon: Icon(Icons.settings_outlined),
             selectedIcon: Icon(Icons.settings),
-            label: '设置',
+            label: '我的',
           ),
         ],
       ),
@@ -342,10 +363,8 @@ class _HomePage extends StatelessWidget {
     required this.onToggle,
     required this.onNext,
     required this.onVolumeChanged,
-    required this.externalTitle,
-    required this.externalSubtitle,
-    required this.externalSource,
-    required this.externalCoverUrl,
+    required this.playback,
+    required this.operationMessage,
     required this.onOpenDevice,
     required this.onOpenSource,
     required this.onPlayUrl,
@@ -361,10 +380,8 @@ class _HomePage extends StatelessWidget {
   final VoidCallback onToggle;
   final VoidCallback onNext;
   final ValueChanged<double> onVolumeChanged;
-  final String? externalTitle;
-  final String? externalSubtitle;
-  final String? externalSource;
-  final String? externalCoverUrl;
+  final PlaybackContext? playback;
+  final String? operationMessage;
   final VoidCallback onOpenDevice;
   final VoidCallback onOpenSource;
   final VoidCallback? onPlayUrl;
@@ -383,15 +400,17 @@ class _HomePage extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final song = status?.currentSong;
-    final isAudiobook = externalSource == 'Audiobookshelf';
-    final title = externalTitle ?? song?.title ?? '暂无播放内容';
-    final subtitle = externalSubtitle ??
+    final isAudiobook = playback?.isAudiobook == true;
+    final title = playback?.title ?? song?.title ?? '暂无播放内容';
+    final subtitle = playback?.subtitle.isNotEmpty == true
+        ? playback!.subtitle
+        :
         (song?.subtitle.isNotEmpty == true
             ? song!.subtitle
             : (status?.playlistName.isNotEmpty == true
                 ? status!.playlistName
                 : '从曲库或有声书中选择内容'));
-    final coverUrl = isAudiobook ? externalCoverUrl : song?.coverUrl;
+    final coverUrl = playback?.coverUrl ?? song?.coverUrl;
     final duration = status?.duration ?? 0;
     final position = status?.position ?? 0;
     final progress = duration <= 0 ? 0.0 : (position / duration).clamp(0.0, 1.0);
@@ -496,7 +515,7 @@ class _HomePage extends StatelessWidget {
                       isAudiobook ? Icons.auto_stories : Icons.library_music,
                       size: 18,
                     ),
-                    label: Text(isAudiobook ? 'Audiobookshelf · 有声书' : 'Songloft · 音乐'),
+                    label: Text('${playback?.sourceLabel ?? 'Songloft'} · ${isAudiobook ? '有声书' : '音乐'}'),
                     visualDensity: VisualDensity.compact,
                   ),
                 ),
@@ -512,7 +531,7 @@ class _HomePage extends StatelessWidget {
                 if (isAudiobook) ...[
                   const SizedBox(height: 4),
                   Text(
-                    '章节播放 · 进度自动回传',
+                    playback?.syncMessage ?? '章节播放 · 进度自动回传',
                     textAlign: TextAlign.center,
                     style: Theme.of(context).textTheme.labelMedium,
                   ),
@@ -598,6 +617,14 @@ class _HomePage extends StatelessWidget {
                     diagnostic!,
                     textAlign: TextAlign.center,
                     style: TextStyle(color: scheme.error),
+                  ),
+                ],
+                if (operationMessage != null && diagnostic == null) ...[
+                  const SizedBox(height: 12),
+                  Text(
+                    operationMessage!,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: scheme.primary),
                   ),
                 ],
               ],
@@ -713,7 +740,7 @@ class _LibraryPageState extends State<_LibraryPage> {
     final playlist = _selected;
     if (device == null || playlist == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('请先在首页选择音箱')),
+        const SnackBar(content: Text('请先在设备页面选择音箱')),
       );
       return;
     }
@@ -736,6 +763,37 @@ class _LibraryPageState extends State<_LibraryPage> {
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  Future<void> _showSongMenu(MediaItem song, int index) async {
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: Wrap(
+          children: [
+            ListTile(
+              leading: const Icon(Icons.play_arrow),
+              title: const Text('立即播放'),
+              onTap: () => Navigator.pop(context, 'play'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.speaker),
+              title: const Text('投送到当前音箱'),
+              subtitle: Text(widget.device?.name ?? '尚未选择设备'),
+              onTap: () => Navigator.pop(context, 'play'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.info_outline),
+              title: const Text('歌曲信息'),
+              subtitle: Text(song.subtitle.isEmpty ? '暂无更多信息' : song.subtitle),
+              onTap: () => Navigator.pop(context),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (action == 'play') await _play(song, index);
   }
 
   @override
@@ -856,7 +914,13 @@ class _LibraryPageState extends State<_LibraryPage> {
                                     ? '未知歌手'
                                     : entry.value.subtitle,
                               ),
-                              trailing: const Icon(Icons.play_arrow),
+                              trailing: IconButton(
+                                tooltip: '歌曲操作',
+                                icon: const Icon(Icons.more_vert),
+                                onPressed: _busy
+                                    ? null
+                                    : () => _showSongMenu(entry.value, entry.key),
+                              ),
                               onTap: _busy
                                   ? null
                                   : () => _play(entry.value, entry.key),
@@ -930,7 +994,7 @@ class _SettingsPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('设置')),
+      appBar: AppBar(title: const Text('我的')),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -939,6 +1003,52 @@ class _SettingsPage extends StatelessWidget {
               leading: const Icon(Icons.dns_outlined),
               title: const Text('Songloft'),
               subtitle: Text(config.normalizedBaseUrl),
+            ),
+          ),
+          const SizedBox(height: 12),
+          const Text('服务连接'),
+          const SizedBox(height: 6),
+          const Card(
+            child: Column(
+              children: [
+                ListTile(
+                  leading: Icon(Icons.auto_stories_outlined),
+                  title: Text('Audiobookshelf'),
+                  subtitle: Text('在“有声书”页面管理连接与书库'),
+                ),
+                Divider(height: 1),
+                ListTile(
+                  leading: Icon(Icons.speaker_outlined),
+                  title: Text('MIoT 设备'),
+                  subtitle: Text('在“设备”页面设置默认音箱并查看状态'),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+          const Text('播放与工具'),
+          const SizedBox(height: 6),
+          const Card(
+            child: Column(
+              children: [
+                ListTile(
+                  leading: Icon(Icons.download_outlined),
+                  title: Text('下载管理'),
+                  subtitle: Text('等待 Songloft 下载接口接入'),
+                ),
+                Divider(height: 1),
+                ListTile(
+                  leading: Icon(Icons.bedtime_outlined),
+                  title: Text('睡眠定时'),
+                  subtitle: Text('后续版本接入设备停止控制'),
+                ),
+                Divider(height: 1),
+                ListTile(
+                  leading: Icon(Icons.speed),
+                  title: Text('播放速度'),
+                  subtitle: Text('取决于 MIoT 音箱能力'),
+                ),
+              ],
             ),
           ),
           const SizedBox(height: 12),
@@ -961,7 +1071,7 @@ class _SettingsPage extends StatelessWidget {
           const SizedBox(height: 24),
           const ListTile(
             title: Text('版本'),
-            subtitle: Text('0.3.2 测试版'),
+            subtitle: Text('0.5.0 交互与信息架构升级版'),
           ),
         ],
       ),
