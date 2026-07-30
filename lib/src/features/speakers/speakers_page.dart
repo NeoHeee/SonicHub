@@ -21,7 +21,12 @@ class _SpeakersPageState extends State<SpeakersPage> {
     _reload();
   }
 
-  void _reload() => setState(() => _devices = widget.api.getDevices());
+  void _reload() {
+    final devices = widget.api.getDevices();
+    setState(() {
+      _devices = devices;
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
