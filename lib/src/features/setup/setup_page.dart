@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import '../../core/config_store.dart';
 import '../../core/server_config.dart';
 import '../../core/songloft_api.dart';
-import '../speakers/speakers_page.dart';
+import '../shell/main_shell.dart';
 
 class SetupPage extends StatefulWidget {
   const SetupPage({required this.configStore, super.key});
@@ -59,7 +59,7 @@ class _SetupPageState extends State<SetupPage> {
       if (!mounted) return;
       await Navigator.of(context).push(
         MaterialPageRoute<void>(
-          builder: (_) => SpeakersPage(api: api),
+          builder: (_) => MainShell(api: api, config: config),
         ),
       );
     } catch (error) {
