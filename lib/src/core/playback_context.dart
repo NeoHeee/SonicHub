@@ -1,6 +1,6 @@
 import 'models.dart';
 
-enum PlaybackSource { songloft, audiobookshelf, directUrl }
+enum PlaybackSource { songloft, audiobookshelf, directUrl, local }
 
 class PlaybackContext {
   const PlaybackContext({
@@ -34,6 +34,7 @@ class PlaybackContext {
         PlaybackSource.songloft => 'Songloft',
         PlaybackSource.audiobookshelf => 'Audiobookshelf',
         PlaybackSource.directUrl => '音频直链',
+        PlaybackSource.local => '本机播放',
       };
 
   factory PlaybackContext.songloft(MediaItem song) => PlaybackContext(
@@ -42,6 +43,22 @@ class PlaybackContext {
         subtitle: song.subtitle,
         coverUrl: song.coverUrl,
         mediaId: '${song.id}',
-        duration: song.duration,
+      duration: song.duration,
+      );
+
+  factory PlaybackContext.local({
+    required String title,
+    String subtitle = '',
+    String? coverUrl,
+    String? mediaId,
+    double duration = 0,
+  }) =>
+      PlaybackContext(
+        source: PlaybackSource.local,
+        title: title,
+        subtitle: subtitle,
+        coverUrl: coverUrl,
+        mediaId: mediaId,
+        duration: duration,
       );
 }
