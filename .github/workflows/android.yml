@@ -102,11 +102,11 @@ jobs:
         run: |
           ${ANDROID_HOME}/build-tools/$(ls "${ANDROID_HOME}/build-tools" | sort -V | tail -1)/apksigner verify --verbose --print-certs build/app/outputs/flutter-apk/app-release.apk
           keytool -list -v -keystore android/app/sonichub-release.jks -storepass "${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" -alias "${{ secrets.ANDROID_KEY_ALIAS }}" | grep -E "Alias name:|SHA256:"
-          cp build/app/outputs/flutter-apk/app-release.apk build/app/outputs/flutter-apk/SonicHub-v0.5.2-release.apk
+          cp build/app/outputs/flutter-apk/app-release.apk build/app/outputs/flutter-apk/SonicHub-v0.6.0-release.apk
 
       - uses: actions/upload-artifact@v4
         with:
-          name: sonichub-v0.5.2-signed-release-apk
-          path: build/app/outputs/flutter-apk/SonicHub-v0.5.2-release.apk
+          name: sonichub-v0.6.0-signed-release-apk
+          path: build/app/outputs/flutter-apk/SonicHub-v0.6.0-release.apk
           if-no-files-found: error
           retention-days: 30
