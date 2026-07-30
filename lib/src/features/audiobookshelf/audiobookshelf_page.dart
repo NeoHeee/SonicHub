@@ -10,7 +10,11 @@ class AudiobookshelfPage extends StatefulWidget {
   const AudiobookshelfPage({required this.songloftApi, required this.device, required this.onPlayed, super.key});
   final SongloftApi songloftApi;
   final SpeakerDevice? device;
-  final void Function(AbsBook book, String? chapterTitle) onPlayed;
+  final void Function(
+    AbsBook book,
+    String? chapterTitle,
+    Future<void> Function() onNext,
+  ) onPlayed;
   @override State<AudiobookshelfPage> createState() => _AudiobookshelfPageState();
 }
 
@@ -112,10 +116,55 @@ class _AudiobookshelfPageState extends State<AudiobookshelfPage> {
           break;
         }
       }
-      widget.onPlayed(detail.book, chapterTitle);
+      widget.onPlayed(detail.book, chapterTitle, _playNext);
       _message(playback.exactTrack ? '已从所选章节对应音轨开始播放' : '已推送音频；单文件 M4B 可能因音箱不支持跳转而从头播放');
     } catch (error) { if (mounted) setState(() => _error = error.toString()); }
     finally { if (mounted) setState(() => _busy = false); }
+  }
+
+  Future<void> _playNext() async {
+    final detail = _playingBook;
+    final playback = _playback;
+    final device = widget.device;
+    if (detail == null || playback == null || device == null) return;
+
+    var current = playback.bookPosition;
+    try {
+      final status = await widget.songloftApi.getStatus(device);
+      current += status.position;
+    } catch (_) {}
+
+    double? nextPosition;
+    final chapters = detail.chapters;
+    if (chapters.isNotEmpty) {
+      var currentIndex = chapters.lastIndexWhere(
+        (chapter) => current >= chapter.start && current < chapter.end,
+      );
+      if (currentIndex < 0) {
+        currentIndex = chapters.lastIndexWhere(
+          (chapter) => chapter.start <= current,
+        );
+      }
+      if (currentIndex + 1 < chapters.length) {
+        nextPosition = chapters[currentIndex + 1].start;
+      }
+    }
+
+    if (nextPosition == null) {
+      for (final track in detail.tracks) {
+        if (track.startOffset > current + 1) {
+          nextPosition = track.startOffset;
+          break;
+        }
+      }
+    }
+
+    if (nextPosition == null) {
+      _message('已经是这本有声书的最后一章');
+      return;
+    }
+    await _syncProgress();
+    await _play(position: nextPosition);
   }
 
   Future<void> _syncProgress() async {
