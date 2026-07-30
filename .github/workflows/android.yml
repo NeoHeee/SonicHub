@@ -26,7 +26,12 @@ jobs:
         run: |
           flutter create --platforms=android --org com.neo --project-name sonichub /tmp/sonichub-platform
           cp -R /tmp/sonichub-platform/android ./android
-          sed -i 's/android:label="sonichub"/android:label="音枢"/' android/app/src/main/AndroidManifest.xml
+          manifest=android/app/src/main/AndroidManifest.xml
+          sed -i 's/android:label="sonichub"/android:label="音枢"/' "$manifest"
+          sed -i '/<manifest/a\\    <uses-permission android:name="android.permission.INTERNET" />' "$manifest"
+          sed -i 's/<application/<application android:usesCleartextTraffic="true"/' "$manifest"
+          grep -q 'android.permission.INTERNET' "$manifest"
+          grep -q 'android:usesCleartextTraffic="true"' "$manifest"
 
       - name: Configure fixed release signing
         env:
@@ -97,11 +102,11 @@ jobs:
         run: |
           ${ANDROID_HOME}/build-tools/$(ls "${ANDROID_HOME}/build-tools" | sort -V | tail -1)/apksigner verify --verbose --print-certs build/app/outputs/flutter-apk/app-release.apk
           keytool -list -v -keystore android/app/sonichub-release.jks -storepass "${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" -alias "${{ secrets.ANDROID_KEY_ALIAS }}" | grep -E "Alias name:|SHA256:"
-          cp build/app/outputs/flutter-apk/app-release.apk build/app/outputs/flutter-apk/SonicHub-v0.5.0-release.apk
+          cp build/app/outputs/flutter-apk/app-release.apk build/app/outputs/flutter-apk/SonicHub-v0.5.1-release.apk
 
       - uses: actions/upload-artifact@v4
         with:
-          name: sonichub-v0.5.0-signed-release-apk
-          path: build/app/outputs/flutter-apk/SonicHub-v0.5.0-release.apk
+          name: sonichub-v0.5.1-signed-release-apk
+          path: build/app/outputs/flutter-apk/SonicHub-v0.5.1-release.apk
           if-no-files-found: error
           retention-days: 30
