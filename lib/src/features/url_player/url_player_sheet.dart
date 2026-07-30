@@ -7,11 +7,13 @@ class UrlPlayerSheet extends StatefulWidget {
   const UrlPlayerSheet({
     required this.api,
     required this.device,
+    required this.onPlayed,
     super.key,
   });
 
   final SongloftApi api;
   final SpeakerDevice device;
+  final ValueChanged<String> onPlayed;
 
   @override
   State<UrlPlayerSheet> createState() => _UrlPlayerSheetState();
@@ -95,7 +97,10 @@ class _UrlPlayerSheetState extends State<UrlPlayerSheet> {
                           return;
                         }
                         _run(
-                          () => widget.api.playUrl(widget.device, uri.toString()),
+                          () async {
+                            await widget.api.playUrl(widget.device, uri.toString());
+                            widget.onPlayed(uri.toString());
+                          },
                           '已发送到音箱',
                         );
                       },
