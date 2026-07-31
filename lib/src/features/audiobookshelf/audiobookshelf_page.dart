@@ -19,7 +19,7 @@ class AudiobookshelfPage extends StatefulWidget {
     Future<void> Function() onNext,
     Future<void> Function(double position) onSeek,
   ) onPlayed;
-  final Future<void> Function(String url)? onLocalPlayed;
+  final Future<void> Function(String url, double startPosition)? onLocalPlayed;
   final Future<double> Function()? localPosition;
   @override State<AudiobookshelfPage> createState() => _AudiobookshelfPageState();
 }
@@ -112,7 +112,7 @@ class _AudiobookshelfPageState extends State<AudiobookshelfPage> {
     try {
       final playback = await _api!.createPlayback(detail, position: position);
       if (device.isLocal) {
-        await widget.onLocalPlayed?.call(playback.url);
+        await widget.onLocalPlayed?.call(playback.url, playback.trackPosition);
       } else {
         await widget.songloftApi.playUrl(device, playback.url);
       }
@@ -138,7 +138,15 @@ class _AudiobookshelfPageState extends State<AudiobookshelfPage> {
         _playNext,
         _seek,
       );
-      _message(playback.exactTrack ? '已从所选章节对应音轨开始播放' : '已推送音频；单文件 M4B 可能因音箱不支持跳转而从头播放');
+      if (device.isLocal) {
+        _message(playback.trackPosition > 0
+            ? '已从书籍指定位置开始播放'
+            : '已从所选章节对应音轨开始播放');
+      } else if (playback.exactTrack) {
+        _message('已从所选章节对应音轨开始播放；音箱不支持音轨内跳转');
+      } else {
+        _message('已切换到对应音轨；当前音箱不支持音轨内跳转');
+      }
     } catch (error) { if (mounted) setState(() => _error = error.toString()); }
     finally { if (mounted) setState(() => _busy = false); }
   }

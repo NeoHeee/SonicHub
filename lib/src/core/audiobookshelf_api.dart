@@ -111,9 +111,18 @@ class AbsBookDetail {
 }
 
 class AbsPlayback {
-  const AbsPlayback({required this.url, required this.bookPosition, required this.duration, required this.exactTrack});
+  const AbsPlayback({
+    required this.url,
+    required this.bookPosition,
+    required this.trackPosition,
+    required this.duration,
+    required this.exactTrack,
+  });
   final String url;
+  /// Position represented by the beginning of the selected audio track.
   final double bookPosition;
+  /// Offset inside the selected track at which playback should start.
+  final double trackPosition;
   final double duration;
   final bool exactTrack;
 }
@@ -188,8 +197,15 @@ class AudiobookshelfApi {
     if (selected.contentUrl.isEmpty) throw const AudiobookshelfException('音轨缺少播放地址');
     final uri = selected.contentUrl.startsWith('http') ? Uri.parse(selected.contentUrl) : Uri.parse('${config.normalizedBaseUrl}${selected.contentUrl}');
     final url = uri.replace(queryParameters: {...uri.queryParameters, 'token': config.apiKey.trim()}).toString();
-    final withinTrack = (target - selected.startOffset).clamp(0, selected.duration);
-    return AbsPlayback(url: url, bookPosition: target, duration: detail.book.duration, exactTrack: available.length > 1 && withinTrack < 2);
+    final withinTrack = (target - selected.startOffset).clamp(0, selected.duration).toDouble();
+    return AbsPlayback(
+      url: url,
+      bookPosition: selected.startOffset,
+      trackPosition: withinTrack,
+      duration: detail.book.duration,
+      // A remote speaker receives a direct URL and cannot seek inside it.
+      exactTrack: withinTrack < 0.5,
+    );
   }
 
   Future<void> updateProgress(String itemId, {required double currentTime, required double duration, bool isFinished = false}) => _patch('/api/me/progress/$itemId', {
