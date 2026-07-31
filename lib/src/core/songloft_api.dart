@@ -171,11 +171,6 @@ class SongloftApi {
   Future<void> togglePlayback(SpeakerDevice device) =>
       _postMiot('/player/toggle', device);
 
-  Future<void> seek(SpeakerDevice device, double position) =>
-      _postMiot('/player/seek', device, {
-        'position': position.clamp(0, 99999999),
-      });
-
   Future<void> playUrl(SpeakerDevice device, String url) =>
       _postMiot('/mina/play-url', device, {'url': url});
 

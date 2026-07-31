@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sonichub/src/core/models.dart';
+import 'package:sonichub/src/core/playback_context.dart';
 import 'package:sonichub/src/core/server_config.dart';
 
 void main() {
@@ -77,5 +78,18 @@ void main() {
       ServerConfig.normalizeBaseUrl('https://songloft.example.com/'),
       'https://songloft.example.com',
     );
+  });
+
+  test('audiobook playback context remains distinct from Songloft music', () {
+    final context = PlaybackContext(
+      source: PlaybackSource.audiobookshelf,
+      title: '测试有声书',
+      subtitle: '第一章 · 作者',
+      mediaId: 'book-1',
+      duration: 3600,
+    );
+
+    expect(context.isAudiobook, isTrue);
+    expect(context.sourceLabel, 'Audiobookshelf');
   });
 }

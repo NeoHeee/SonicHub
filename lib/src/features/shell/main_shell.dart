@@ -34,6 +34,7 @@ class _MainShellState extends State<MainShell> {
   PlaybackContext? _playback;
   String? _operationMessage;
   final _configStore = ConfigStore();
+  final _playbackStore = PlaybackContextStore();
   Timer? _statusTimer;
   final _localPlayer = LocalAudioPlayer();
   List<MediaItem> _localQueue = const [];
@@ -45,7 +46,9 @@ class _MainShellState extends State<MainShell> {
   @override
   void initState() {
     super.initState();
-    _devices = _loadDevices();
+    // Restore the source context before querying the speaker. Otherwise a
+    // stale Songloft current_song can replace the audiobook after restart.
+    _devices = _restorePlayback().then((_) => _loadDevices());
     _localPositionSubscription = _localPlayer.positionStream.listen((_) => _updateLocalStatus());
     _localDurationSubscription = _localPlayer.durationStream.listen((_) => _updateLocalStatus());
     _localStateSubscription = _localPlayer.playerStateStream.listen((_) => _updateLocalStatus());
@@ -54,6 +57,16 @@ class _MainShellState extends State<MainShell> {
         _refreshStatus(silent: true);
       }
     });
+  }
+
+  Future<void> _restorePlayback() async {
+    final restored = await _playbackStore.load();
+    if (!mounted || restored == null) return;
+    setState(() => _playback = restored);
+  }
+
+  void _savePlayback(PlaybackContext context) {
+    unawaited(_playbackStore.save(context));
   }
 
   @override
@@ -185,6 +198,7 @@ class _MainShellState extends State<MainShell> {
         headers: widget.api.audioHeadersFor(url),
       );
       if (mounted) {
+        await _playbackStore.clear();
         setState(() {
           _localQueue = queue.isEmpty ? [song] : List<MediaItem>.of(queue);
           _localIndex = queue.isEmpty ? 0 : index;
@@ -206,11 +220,15 @@ class _MainShellState extends State<MainShell> {
     }
   }
 
-  Future<void> _playLocalUrl(String url) async {
+  Future<void> _playLocalUrl(String url, [double startPosition = 0]) async {
     setState(() => _busy = true);
     try {
       await _localPlayer.playUrl(url.trim());
+      if (startPosition > 0) {
+        await _localPlayer.seek(startPosition);
+      }
       if (mounted) {
+        await _playbackStore.clear();
         final uri = Uri.parse(url);
         setState(() {
           _localQueue = const [];
@@ -291,8 +309,8 @@ class _MainShellState extends State<MainShell> {
     Future<void> Function() onNext,
     Future<void> Function(double position) onSeek,
   ) {
-    setState(() {
-      _playback = PlaybackContext(
+    final local = _selectedDevice?.isLocal == true;
+    final context = PlaybackContext(
         source: PlaybackSource.audiobookshelf,
         title: book.title,
         subtitle: [
@@ -303,17 +321,23 @@ class _MainShellState extends State<MainShell> {
         mediaId: book.id,
         position: bookPosition,
         duration: book.duration,
-        syncMessage: '等待下一次进度同步',
+        syncMessage: local
+            ? '本机播放 · 支持精确拖动'
+            : '音箱直链播放 · 支持章节切换，不支持进度跳转',
         onPrevious: onPrevious,
         onNext: onNext,
-        onSeek: onSeek,
+        onSeek: local ? onSeek : null,
       );
+    setState(() {
+      _playback = context;
       _operationMessage = '已投送到 ${_selectedDevice?.name ?? '当前音箱'}';
     });
+    _savePlayback(context);
     _refreshStatus();
   }
 
   void _clearExternalPlayback() {
+    unawaited(_playbackStore.clear());
     setState(() {
       _playback = null;
       _operationMessage = '正在读取 Songloft 播放状态';
@@ -323,8 +347,7 @@ class _MainShellState extends State<MainShell> {
 
   void _showDirectUrl(String url) {
     final uri = Uri.parse(url);
-    setState(() {
-      _playback = PlaybackContext(
+    final context = PlaybackContext(
         source: PlaybackSource.directUrl,
         title: uri.pathSegments.isEmpty || uri.pathSegments.last.isEmpty
             ? '音频直链'
@@ -332,8 +355,11 @@ class _MainShellState extends State<MainShell> {
         subtitle: uri.host,
         mediaId: url,
       );
+    setState(() {
+      _playback = context;
       _operationMessage = '直链已投送到 ${_selectedDevice?.name ?? '当前音箱'}';
     });
+    _savePlayback(context);
   }
 
   Future<void> _previous() async {
@@ -351,6 +377,14 @@ class _MainShellState extends State<MainShell> {
     }
     final contextualPrevious = _playback?.onPrevious;
     if (contextualPrevious == null) {
+      if (_playback?.isAudiobook == true) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('请进入有声书页面继续收听后使用章节控制')),
+          );
+        }
+        return;
+      }
       await _control(widget.api.previous);
       return;
     }
@@ -372,6 +406,14 @@ class _MainShellState extends State<MainShell> {
     }
     final contextualNext = _playback?.onNext;
     if (contextualNext == null) {
+      if (_playback?.isAudiobook == true) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('请进入有声书页面继续收听后使用章节控制')),
+          );
+        }
+        return;
+      }
       await _control(widget.api.next);
       return;
     }
@@ -407,8 +449,11 @@ class _MainShellState extends State<MainShell> {
       await _runContextAction(() => contextualSeek(position));
       return;
     }
-    if (_playback?.source == PlaybackSource.directUrl) return;
-    await _control((device) => widget.api.seek(device, position));
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('当前音箱播放方式不支持进度跳转，请使用章节切换')),
+      );
+    }
   }
 
   Future<void> _logout() async {
@@ -768,7 +813,9 @@ class _HomePage extends StatelessWidget {
                 _SeekSlider(
                   position: position,
                   duration: duration,
-                  enabled: selectedDevice != null && !busy && duration > 0,
+                  enabled: selectedDevice?.isLocal == true &&
+                      !busy &&
+                      duration > 0,
                   onSeek: onSeek,
                 ),
                 Row(
