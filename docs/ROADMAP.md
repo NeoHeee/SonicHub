@@ -61,7 +61,7 @@
 - [x] GitHub Actions 分析、测试、固定签名构建和签名验证
 - [x] 生成 `SonicHub-v0.6.7+17-signed-release.apk`
 - [ ] 完成真实 Songloft、Audiobookshelf 与智能音箱环境验收
-- [ ] 创建 `v0.6.7+17` GitHub Release
+- [x] 创建 `v0.6.7+17` GitHub Release
 
 ## v1.0.0 稳定版
 
