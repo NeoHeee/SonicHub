@@ -9,11 +9,31 @@ class LocalAudioPlayer {
   Stream<Duration?> get durationStream => _player.durationStream;
   Stream<PlayerState> get playerStateStream => _player.playerStateStream;
 
-  Future<void> playUrl(String url) async {
+  Future<void> playUrl(
+    String url, {
+    Map<String, String> headers = const {},
+  }) async {
     final value = url.trim();
-    if (value.isEmpty) throw const FormatException('没有可播放的音频地址');
-    await _player.setUrl(value);
-    await _player.play();
+    final uri = Uri.tryParse(value);
+    if (value.isEmpty || uri == null || !uri.isAbsolute) {
+      throw const FormatException('没有可播放的音频地址');
+    }
+    try {
+      await _player.setAudioSource(
+        AudioSource.uri(
+          uri,
+          headers: headers.isEmpty ? null : headers,
+        ),
+      );
+      await _player.play();
+    } on PlayerException catch (error) {
+      final detail = error.message?.trim();
+      throw FormatException(
+        detail == null || detail.isEmpty
+            ? '音频源无法访问（${error.code}）'
+            : '音频源无法访问：$detail',
+      );
+    }
   }
 
   Future<void> pause() => _player.pause();

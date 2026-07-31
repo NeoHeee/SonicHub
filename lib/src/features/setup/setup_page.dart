@@ -17,7 +17,7 @@ class SetupPage extends StatefulWidget {
 class _SetupPageState extends State<SetupPage> {
   final _formKey = GlobalKey<FormState>();
   final _url = TextEditingController();
-  final _username = TextEditingController(text: 'admin');
+  final _username = TextEditingController();
   final _password = TextEditingController();
   bool _busy = false;
   String? _message;
