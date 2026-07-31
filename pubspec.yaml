@@ -1,7 +1,7 @@
 name: sonichub
 description: 音枢 SonicHub - 多音源智能音箱控制中心
 publish_to: none
-version: 0.6.4+14
+version: 0.6.5+15
 
 environment:
   sdk: ">=3.4.0 <4.0.0"
