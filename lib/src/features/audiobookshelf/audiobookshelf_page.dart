@@ -19,7 +19,11 @@ class AudiobookshelfPage extends StatefulWidget {
     Future<void> Function() onNext,
     Future<void> Function(double position) onSeek,
   ) onPlayed;
-  final Future<void> Function(String url, double startPosition)? onLocalPlayed;
+  final Future<void> Function(
+    String url,
+    double startPosition,
+    Map<String, String> headers,
+  )? onLocalPlayed;
   final Future<double> Function()? localPosition;
   @override State<AudiobookshelfPage> createState() => _AudiobookshelfPageState();
 }
@@ -112,7 +116,11 @@ class _AudiobookshelfPageState extends State<AudiobookshelfPage> {
     try {
       final playback = await _api!.createPlayback(detail, position: position);
       if (device.isLocal) {
-        await widget.onLocalPlayed?.call(playback.url, playback.trackPosition);
+        await widget.onLocalPlayed?.call(
+          playback.url,
+          playback.trackPosition,
+          playback.headers,
+        );
       } else {
         await widget.songloftApi.playUrl(device, playback.url);
       }
@@ -155,19 +163,36 @@ class _AudiobookshelfPageState extends State<AudiobookshelfPage> {
     final playback = _playback;
     final device = widget.device;
     if (playback == null || device == null) return null;
+    if (!device.isLocal) {
+      return playback.requestedPosition;
+    }
     var current = playback.bookPosition;
     try {
-      current += device.isLocal
-          ? await widget.localPosition?.call() ?? 0
-          : (await widget.songloftApi.getStatus(device)).position;
+      current += await widget.localPosition?.call() ?? 0;
     } catch (_) {}
     return current;
   }
 
   Future<void> _playPrevious() async {
     final detail = _playingBook;
+    final playback = _playback;
+    final device = widget.device;
     final current = await _currentBookPosition();
-    if (detail == null || current == null) return;
+    if (detail == null || playback == null || device == null || current == null) {
+      return;
+    }
+    if (!device.isLocal) {
+      final index = playback.trackStarts.lastIndexWhere(
+        (start) => start <= playback.bookPosition + 0.5,
+      );
+      if (index <= 0) {
+        _message('已经是这本有声书的第一条音轨');
+        return;
+      }
+      await _syncProgress();
+      await _play(position: playback.trackStarts[index - 1]);
+      return;
+    }
     final chapters = detail.chapters;
     if (chapters.isEmpty) {
       _message('这本有声书没有可切换的章节');
@@ -205,14 +230,31 @@ class _AudiobookshelfPageState extends State<AudiobookshelfPage> {
     final device = widget.device;
     if (detail == null || playback == null || device == null) return;
 
-    var current = playback.bookPosition;
-    try {
-      current += device.isLocal
-          ? await widget.localPosition?.call() ?? 0
-          : (await widget.songloftApi.getStatus(device)).position;
-    } catch (_) {}
+    var current = playback.requestedPosition;
+    if (device.isLocal) {
+      current = playback.bookPosition;
+      try {
+        current += await widget.localPosition?.call() ?? 0;
+      } catch (_) {}
+    }
 
     double? nextPosition;
+    if (!device.isLocal) {
+      for (final start in playback.trackStarts) {
+        if (start > playback.bookPosition + 0.5) {
+          nextPosition = start;
+          break;
+        }
+      }
+      if (nextPosition == null) {
+        _message('已经是这本有声书的最后一条音轨');
+        return;
+      }
+      await _syncProgress();
+      await _play(position: nextPosition);
+      return;
+    }
+
     final chapters = detail.chapters;
     if (chapters.isNotEmpty) {
       var currentIndex = chapters.lastIndexWhere(

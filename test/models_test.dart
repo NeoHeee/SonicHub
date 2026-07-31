@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sonichub/src/core/audiobookshelf_api.dart';
 import 'package:sonichub/src/core/models.dart';
 import 'package:sonichub/src/core/playback_context.dart';
 import 'package:sonichub/src/core/server_config.dart';
@@ -91,5 +92,25 @@ void main() {
 
     expect(context.isAudiobook, isTrue);
     expect(context.sourceLabel, 'Audiobookshelf');
+  });
+
+  test('Audiobookshelf content URLs resolve with or without a leading slash', () {
+    const config = AudiobookshelfConfig(
+      baseUrl: 'https://books.example.com/',
+      apiKey: 'secret-token',
+    );
+
+    expect(
+      config.resolveContentUrl('/api/items/book/audio').toString(),
+      'https://books.example.com/api/items/book/audio',
+    );
+    expect(
+      config.resolveContentUrl('api/items/book/audio').toString(),
+      'https://books.example.com/api/items/book/audio',
+    );
+    expect(
+      config.audioHeaders['Authorization'],
+      'Bearer secret-token',
+    );
   });
 }
