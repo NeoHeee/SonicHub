@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:just_audio/just_audio.dart';
 
 class LocalAudioPlayer {
@@ -25,7 +27,12 @@ class LocalAudioPlayer {
           headers: headers.isEmpty ? null : headers,
         ),
       );
-      await _player.play();
+      // just_audio's play() future completes when playback stops, not when
+      // playback has merely started. Awaiting it here keeps the shell busy
+      // for the entire track and disables all playback controls. Start the
+      // playback asynchronously so callers can immediately use pause, stop,
+      // previous and next.
+      unawaited(_player.play());
     } on PlayerException catch (error) {
       final detail = error.message?.trim();
       throw FormatException(
