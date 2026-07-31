@@ -173,12 +173,12 @@ class _MainShellState extends State<MainShell> {
   void _showDirectUrl(String url) => _controller.setDirectUrlContext(url);
 
   Future<void> _previous() => _controller.previous(
-        resolveUrl: widget.api.resolveAudioUrl,
+        resolveUrl: (item) => widget.api.resolveAudioUrl(item.playUrl),
         headersFor: widget.api.audioHeadersFor,
       );
 
   Future<void> _next() => _controller.next(
-        resolveUrl: widget.api.resolveAudioUrl,
+        resolveUrl: (item) => widget.api.resolveAudioUrl(item.playUrl),
         headersFor: widget.api.audioHeadersFor,
       );
 
