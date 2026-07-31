@@ -27,7 +27,7 @@ class LocalAudioPlayer {
       );
       await _player.play();
     } on PlayerException catch (error) {
-      final detail = error.message.trim();
+      final detail = error.message?.trim() ?? '';
       throw FormatException(
         detail.isEmpty
             ? '音频源无法访问（${error.code}）'
