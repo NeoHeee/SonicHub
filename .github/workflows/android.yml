@@ -1,4 +1,5 @@
 # CI trigger for v0.6.7+17
+# Re-trigger Android release build
 name: Android
 
 on:
