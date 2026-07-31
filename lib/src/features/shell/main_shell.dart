@@ -173,7 +173,11 @@ class _MainShellState extends State<MainShell> {
     }
     setState(() => _busy = true);
     try {
-      await _localPlayer.playUrl(song.playUrl);
+      final url = widget.api.resolveAudioUrl(song.playUrl);
+      await _localPlayer.playUrl(
+        url,
+        headers: widget.api.audioHeadersFor(url),
+      );
       if (mounted) {
         setState(() {
           _playback = PlaybackContext.local(
