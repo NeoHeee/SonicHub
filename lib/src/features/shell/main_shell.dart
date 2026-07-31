@@ -220,13 +220,18 @@ class _MainShellState extends State<MainShell> {
     }
   }
 
-  Future<void> _playLocalUrl(String url, [double startPosition = 0]) async {
+  Future<void> _playLocalUrl(
+    String url, [
+    double startPosition = 0,
+    Map<String, String> headers = const {},
+  ]) async {
     setState(() => _busy = true);
     try {
-      await _localPlayer.playUrl(url.trim());
-      if (startPosition > 0) {
-        await _localPlayer.seek(startPosition);
-      }
+      await _localPlayer.playUrl(
+        url.trim(),
+        headers: headers,
+        initialPosition: startPosition,
+      );
       if (mounted) {
         await _playbackStore.clear();
         final uri = Uri.parse(url);
@@ -363,6 +368,11 @@ class _MainShellState extends State<MainShell> {
   }
 
   Future<void> _previous() async {
+    final contextualPrevious = _playback?.onPrevious;
+    if (_playback?.isAudiobook == true && contextualPrevious != null) {
+      await _runContextAction(contextualPrevious);
+      return;
+    }
     if (_selectedDevice?.isLocal == true) {
       if (_localQueue.isEmpty || _localIndex <= 0) {
         setState(() => _operationMessage = '已经是本机播放队列第一首');
@@ -375,7 +385,6 @@ class _MainShellState extends State<MainShell> {
       );
       return;
     }
-    final contextualPrevious = _playback?.onPrevious;
     if (contextualPrevious == null) {
       if (_playback?.isAudiobook == true) {
         if (mounted) {
@@ -392,6 +401,11 @@ class _MainShellState extends State<MainShell> {
   }
 
   Future<void> _next() async {
+    final contextualNext = _playback?.onNext;
+    if (_playback?.isAudiobook == true && contextualNext != null) {
+      await _runContextAction(contextualNext);
+      return;
+    }
     if (_selectedDevice?.isLocal == true) {
       if (_localQueue.isEmpty || _localIndex < 0 || _localIndex >= _localQueue.length - 1) {
         setState(() => _operationMessage = '已经是本机播放队列最后一首');
@@ -404,7 +418,6 @@ class _MainShellState extends State<MainShell> {
       );
       return;
     }
-    final contextualNext = _playback?.onNext;
     if (contextualNext == null) {
       if (_playback?.isAudiobook == true) {
         if (mounted) {
@@ -1554,7 +1567,7 @@ class _SettingsPage extends StatelessWidget {
           const SizedBox(height: 24),
           const ListTile(
             title: Text('版本'),
-            subtitle: Text('0.6.0 统一音源与页面体验版'),
+            subtitle: Text('v0.6.8+18'),
           ),
         ],
       ),

@@ -14,6 +14,7 @@ class LocalAudioPlayer {
   Future<void> playUrl(
     String url, {
     Map<String, String> headers = const {},
+    double initialPosition = 0,
   }) async {
     final value = url.trim();
     final uri = Uri.tryParse(value);
@@ -26,6 +27,9 @@ class LocalAudioPlayer {
           uri,
           headers: headers.isEmpty ? null : headers,
         ),
+        initialPosition: initialPosition > 0
+            ? Duration(milliseconds: (initialPosition * 1000).round())
+            : Duration.zero,
       );
       // just_audio's play() future completes when playback stops, not when
       // playback has merely started. Awaiting it here keeps the shell busy

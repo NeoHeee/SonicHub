@@ -9,6 +9,18 @@ class AudiobookshelfConfig {
   final String apiKey;
   final String libraryId;
   String get normalizedBaseUrl => baseUrl.trim().replaceFirst(RegExp(r'/+$'), '');
+  Map<String, String> get audioHeaders => {
+    'Authorization': 'Bearer ${apiKey.trim()}',
+  };
+  Uri resolveContentUrl(String contentUrl) {
+    final value = contentUrl.trim();
+    final parsed = Uri.tryParse(value);
+    if (parsed == null || value.isEmpty) {
+      throw const AudiobookshelfException('音轨缺少播放地址');
+    }
+    if (parsed.hasScheme) return parsed;
+    return Uri.parse('$normalizedBaseUrl/').resolve(value);
+  }
   AudiobookshelfConfig copyWith({String? libraryId}) => AudiobookshelfConfig(baseUrl: baseUrl, apiKey: apiKey, libraryId: libraryId ?? this.libraryId);
 }
 
@@ -113,16 +125,24 @@ class AbsBookDetail {
 class AbsPlayback {
   const AbsPlayback({
     required this.url,
+    required this.headers,
     required this.bookPosition,
+    required this.requestedPosition,
     required this.trackPosition,
+    required this.trackStarts,
     required this.duration,
     required this.exactTrack,
   });
   final String url;
+  final Map<String, String> headers;
   /// Position represented by the beginning of the selected audio track.
   final double bookPosition;
+  /// Absolute book position requested by the user, used for deterministic
+  /// chapter navigation when a remote speaker cannot report direct-URL progress.
+  final double requestedPosition;
   /// Offset inside the selected track at which playback should start.
   final double trackPosition;
+  final List<double> trackStarts;
   final double duration;
   final bool exactTrack;
 }
@@ -194,14 +214,18 @@ class AudiobookshelfApi {
       final end = track.startOffset + track.duration;
       if (target >= track.startOffset && (track.duration <= 0 || target < end)) { selected = track; break; }
     }
-    if (selected.contentUrl.isEmpty) throw const AudiobookshelfException('音轨缺少播放地址');
-    final uri = selected.contentUrl.startsWith('http') ? Uri.parse(selected.contentUrl) : Uri.parse('${config.normalizedBaseUrl}${selected.contentUrl}');
+    final uri = config.resolveContentUrl(selected.contentUrl);
     final url = uri.replace(queryParameters: {...uri.queryParameters, 'token': config.apiKey.trim()}).toString();
     final withinTrack = (target - selected.startOffset).clamp(0, selected.duration).toDouble();
     return AbsPlayback(
       url: url,
+      headers: config.audioHeaders,
       bookPosition: selected.startOffset,
+      requestedPosition: target,
       trackPosition: withinTrack,
+      trackStarts: [
+        for (final track in available) track.startOffset,
+      ]..sort(),
       duration: detail.book.duration,
       // A remote speaker receives a direct URL and cannot seek inside it.
       exactTrack: withinTrack < 0.5,
