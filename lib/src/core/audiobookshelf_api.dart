@@ -183,7 +183,7 @@ class AudiobookshelfApi {
 
   Future<AbsPlayback> createPlayback(AbsBookDetail detail, {double? position}) async {
     final body = await _post('/api/items/${detail.book.id}/play', {
-      'deviceInfo': {'deviceId': 'sonichub', 'deviceName': '音枢 SonicHub', 'clientName': 'SonicHub', 'clientVersion': '0.7.0-alpha.1'},
+      'deviceInfo': {'deviceId': 'sonichub', 'deviceName': '音枢 SonicHub', 'clientName': 'SonicHub', 'clientVersion': '0.7.0-alpha.2'},
       'supportedMimeTypes': ['audio/mpeg', 'audio/mp4', 'audio/aac', 'audio/flac'],
       'forceDirectPlay': true,
       'mediaPlayer': 'sonichub-miot',

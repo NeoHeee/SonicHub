@@ -172,15 +172,9 @@ class _MainShellState extends State<MainShell> {
 
   void _showDirectUrl(String url) => _controller.setDirectUrlContext(url);
 
-  Future<void> _previous() => _controller.previous(
-        resolveUrl: (item) => widget.api.resolveAudioUrl(item.playUrl),
-        headersFor: widget.api.audioHeadersFor,
-      );
+  Future<void> _previous() => _controller.previous();
 
-  Future<void> _next() => _controller.next(
-        resolveUrl: (item) => widget.api.resolveAudioUrl(item.playUrl),
-        headersFor: widget.api.audioHeadersFor,
-      );
+  Future<void> _next() => _controller.next();
 
   Future<void> _seek(double position) => _controller.seek(position);
 
@@ -1271,7 +1265,7 @@ class _SettingsPage extends StatelessWidget {
           const SizedBox(height: 24),
           const ListTile(
             title: Text('版本'),
-            subtitle: Text('v0.7.0-alpha.1 播放内核重构预览版'),
+            subtitle: Text('v0.7.0-alpha.2 播放引擎拆分预览版'),
           ),
         ],
       ),

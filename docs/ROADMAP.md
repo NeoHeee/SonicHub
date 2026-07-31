@@ -68,6 +68,8 @@
 - [x] 将设备状态、本机播放器、播放队列和播放上下文迁入 `PlaybackController`
 - [x] 用统一能力模型控制上一首、下一首、暂停、停止和进度跳转
 - [x] 本机有声书支持带起始位置的播放
+- [x] 拆分 `LocalPlaybackEngine` 与 `SongloftPlaybackEngine`
+- [x] 设备状态刷新增加请求代际保护，丢弃过期响应
 - [ ] 完成自动化分析、测试、签名构建和 APK 产物验证
 - [ ] 完成真实 Songloft、Audiobookshelf、手机和智能音箱环境验收
 

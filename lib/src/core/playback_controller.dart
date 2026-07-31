@@ -6,17 +6,10 @@ import 'package:just_audio/just_audio.dart';
 import 'local_audio_player.dart';
 import 'models.dart';
 import 'playback_context.dart';
+import 'playback_engine.dart';
 import 'songloft_api.dart';
 
-enum PlaybackPhase {
-  idle,
-  loading,
-  buffering,
-  playing,
-  paused,
-  completed,
-  error,
-}
+enum PlaybackPhase { idle, loading, buffering, playing, paused, completed, error }
 
 class PlaybackCapabilities {
   const PlaybackCapabilities({
@@ -48,12 +41,14 @@ class PlaybackController extends ChangeNotifier {
     LocalAudioPlayer? localPlayer,
     PlaybackContextStore? contextStore,
   })  : _api = api,
-        localPlayer = localPlayer ?? LocalAudioPlayer(),
-        _contextStore = contextStore ?? PlaybackContextStore();
+        _contextStore = contextStore ?? PlaybackContextStore(),
+        _localEngine = LocalPlaybackEngine(api: api, player: localPlayer),
+        _remoteEngine = SongloftPlaybackEngine(api);
 
   final SongloftApi _api;
   final PlaybackContextStore _contextStore;
-  final LocalAudioPlayer localPlayer;
+  final LocalPlaybackEngine _localEngine;
+  final SongloftPlaybackEngine _remoteEngine;
 
   SpeakerDevice? selectedDevice;
   DeviceStatus? status;
@@ -63,18 +58,19 @@ class PlaybackController extends ChangeNotifier {
   bool busy = false;
   PlaybackPhase phase = PlaybackPhase.idle;
 
-  List<MediaItem> _localQueue = const [];
-  int _localIndex = -1;
   Timer? _statusTimer;
   StreamSubscription<Duration>? _positionSubscription;
   StreamSubscription<Duration?>? _durationSubscription;
   StreamSubscription<PlayerState>? _playerStateSubscription;
+  final RequestGeneration _generation = RequestGeneration();
+  bool _disposed = false;
 
   bool get isLocal => selectedDevice?.isLocal == true;
+  LocalAudioPlayer get localPlayer => _localEngine.player;
+  PlaybackEngine get _engine => isLocal ? _localEngine : _remoteEngine;
 
   PlaybackCapabilities get capabilities {
-    final device = selectedDevice;
-    if (device == null) return PlaybackCapabilities.none;
+    if (selectedDevice == null) return PlaybackCapabilities.none;
     if (context?.isAudiobook == true) {
       return PlaybackCapabilities(
         canToggle: true,
@@ -88,10 +84,9 @@ class PlaybackController extends ChangeNotifier {
       return PlaybackCapabilities(
         canToggle: true,
         canStop: true,
-        canPrevious: _localQueue.isNotEmpty && _localIndex > 0,
-        canNext:
-            _localQueue.isNotEmpty && _localIndex < _localQueue.length - 1,
-        canSeek: status?.duration != null && status!.duration > 0,
+        canPrevious: _localEngine.canPrevious,
+        canNext: _localEngine.canNext,
+        canSeek: (status?.duration ?? 0) > 0,
       );
     }
     return const PlaybackCapabilities(
@@ -105,86 +100,73 @@ class PlaybackController extends ChangeNotifier {
 
   Future<void> initialize() async {
     context = await _contextStore.load();
-    _positionSubscription =
-        localPlayer.positionStream.listen((_) => _updateLocalStatus());
-    _durationSubscription =
-        localPlayer.durationStream.listen((_) => _updateLocalStatus());
-    _playerStateSubscription =
-        localPlayer.playerStateStream.listen(_handlePlayerState);
+    _positionSubscription = localPlayer.positionStream.listen((_) => _syncLocal());
+    _durationSubscription = localPlayer.durationStream.listen((_) => _syncLocal());
+    _playerStateSubscription = localPlayer.playerStateStream.listen(_handlePlayerState);
     _statusTimer = Timer.periodic(const Duration(seconds: 2), (_) {
-      if (!busy && selectedDevice != null) {
-        unawaited(refreshStatus(silent: true));
-      }
+      if (!busy && selectedDevice != null) unawaited(refreshStatus(silent: true));
     });
-    notifyListeners();
+    _notify();
   }
 
-  void _handlePlayerState(PlayerState state) {
-    if (state.processingState == ProcessingState.loading) {
-      phase = PlaybackPhase.loading;
-    } else if (state.processingState == ProcessingState.buffering) {
-      phase = PlaybackPhase.buffering;
-    } else if (state.processingState == ProcessingState.completed) {
-      phase = PlaybackPhase.completed;
-    } else if (state.playing) {
-      phase = PlaybackPhase.playing;
-    } else if (state.processingState == ProcessingState.ready) {
-      phase = PlaybackPhase.paused;
-    } else {
-      phase = PlaybackPhase.idle;
-    }
-    _updateLocalStatus();
+  void _handlePlayerState(PlayerState value) {
+    phase = switch (value.processingState) {
+      ProcessingState.loading => PlaybackPhase.loading,
+      ProcessingState.buffering => PlaybackPhase.buffering,
+      ProcessingState.completed => PlaybackPhase.completed,
+      ProcessingState.ready => value.playing ? PlaybackPhase.playing : PlaybackPhase.paused,
+      _ => PlaybackPhase.idle,
+    };
+    _syncLocal();
   }
 
   Future<void> selectDevice(SpeakerDevice? device) async {
+    _generation.advance();
     selectedDevice = device;
     status = null;
     operationMessage = '已切换到 ${device?.name ?? '未选择设备'}';
-    notifyListeners();
+    _notify();
     await refreshStatus();
   }
 
   Future<void> refreshStatus({bool silent = false}) async {
     final device = selectedDevice;
     if (device == null) return;
-    if (device.isLocal) {
-      _updateLocalStatus();
-      return;
-    }
+    final generation = _generation.current;
     if (!silent) {
       busy = true;
       diagnostic = null;
-      notifyListeners();
+      _notify();
     }
     try {
-      final nextStatus = await _api.getStatus(device);
+      final nextStatus = await _engine.refresh(device);
+      if (!_isCurrent(generation, device)) return;
       status = nextStatus;
-      if (nextStatus.currentSong != null &&
+      if (nextStatus?.currentSong != null &&
           (context == null || context!.source == PlaybackSource.songloft)) {
-        context = PlaybackContext.songloft(nextStatus.currentSong!);
+        context = PlaybackContext.songloft(nextStatus!.currentSong!);
       }
     } catch (error) {
-      diagnostic = error.toString();
-      phase = PlaybackPhase.error;
+      if (_isCurrent(generation, device)) {
+        diagnostic = error.toString();
+        phase = PlaybackPhase.error;
+      }
     } finally {
-      if (!silent) busy = false;
-      notifyListeners();
+      if (!silent && _isCurrent(generation, device)) busy = false;
+      _notify();
     }
   }
 
-  void _updateLocalStatus() {
-    if (!isLocal) return;
-    status = DeviceStatus(
-      state: localPlayer.isPlaying ? 'playing' : 'paused',
-      volume: null,
-      position: localPlayer.position,
-      duration: localPlayer.duration,
-      currentIndex: _localIndex,
-      playlistId: 0,
-      playlistName: '本机播放',
-      currentSong: null,
-    );
-    notifyListeners();
+  bool _isCurrent(int generation, SpeakerDevice device) =>
+      !_disposed &&
+      _generation.isCurrent(generation) &&
+      selectedDevice?.id == device.id &&
+      selectedDevice?.accountId == device.accountId;
+
+  void _syncLocal() {
+    if (!isLocal || _disposed) return;
+    status = _localEngine.status;
+    _notify();
   }
 
   Future<void> playLocal(
@@ -197,15 +179,13 @@ class PlaybackController extends ChangeNotifier {
     if (url.trim().isEmpty) {
       diagnostic = '这首歌曲没有可用的播放地址';
       phase = PlaybackPhase.error;
-      notifyListeners();
+      _notify();
       return;
     }
     await _run(() async {
       phase = PlaybackPhase.loading;
-      await localPlayer.playUrl(url, headers: headers);
+      await _localEngine.playMedia(song, url: url, headers: headers, queue: queue, index: index);
       await _contextStore.clear();
-      _localQueue = queue.isEmpty ? [song] : List<MediaItem>.of(queue);
-      _localIndex = queue.isEmpty ? 0 : index;
       context = PlaybackContext.local(
         title: song.title,
         subtitle: song.subtitle,
@@ -214,7 +194,7 @@ class PlaybackController extends ChangeNotifier {
         duration: song.duration,
       );
       operationMessage = '正在本机播放';
-      _updateLocalStatus();
+      _syncLocal();
     });
   }
 
@@ -222,154 +202,79 @@ class PlaybackController extends ChangeNotifier {
     String url, {
     double initialPosition = 0,
     Map<String, String> headers = const {},
-  }) async {
-    await _run(() async {
-      phase = PlaybackPhase.loading;
-      await localPlayer.playUrl(
-        url.trim(),
-        headers: headers,
-        initialPosition: initialPosition,
-      );
-      await _contextStore.clear();
-      final uri = Uri.parse(url);
-      _localQueue = const [];
-      _localIndex = -1;
-      context = PlaybackContext.local(
-        title: uri.pathSegments.isEmpty || uri.pathSegments.last.isEmpty
-            ? '音频直链'
-            : Uri.decodeComponent(uri.pathSegments.last),
-        subtitle: uri.host,
-        mediaId: url,
-      );
-      operationMessage = '正在本机播放';
-      _updateLocalStatus();
-    });
-  }
+  }) => _run(() async {
+        phase = PlaybackPhase.loading;
+        await _localEngine.playUrl(url.trim(), initialPosition: initialPosition, headers: headers);
+        await _contextStore.clear();
+        final uri = Uri.parse(url);
+        context = PlaybackContext.local(
+          title: uri.pathSegments.isEmpty || uri.pathSegments.last.isEmpty
+              ? '音频直链'
+              : Uri.decodeComponent(uri.pathSegments.last),
+          subtitle: uri.host,
+          mediaId: url,
+        );
+        operationMessage = '正在本机播放';
+        _syncLocal();
+      });
 
-  Future<void> toggle() async {
-    if (isLocal) {
-      if (localPlayer.isPlaying) {
-        await localPlayer.pause();
-      } else {
-        unawaited(localPlayer.resume());
-      }
-      _updateLocalStatus();
-      return;
-    }
-    await _control(_api.togglePlayback);
-  }
+  Future<void> toggle() => _control((engine, device) => engine.toggle(device));
 
-  Future<void> stop() async {
-    if (isLocal) {
-      await localPlayer.stop();
-      phase = PlaybackPhase.idle;
-      operationMessage = '本机播放已停止';
-      _updateLocalStatus();
-      return;
-    }
-    await _control(_api.stop);
-  }
+  Future<void> stop() => _control((engine, device) async {
+        await engine.stop(device);
+        if (engine.isLocal) phase = PlaybackPhase.idle;
+      });
 
-  Future<void> previous({
-    required String Function(MediaItem item) resolveUrl,
-    required Map<String, String> Function(String url) headersFor,
-  }) async {
+  Future<void> previous() async {
     final contextual = context?.onPrevious;
     if (context?.isAudiobook == true && contextual != null) {
       await _runContextAction(contextual);
-      return;
-    }
-    if (isLocal) {
-      if (_localQueue.isEmpty || _localIndex <= 0) {
-        operationMessage = '已经是本机播放队列第一首';
-        notifyListeners();
-        return;
-      }
-      final nextIndex = _localIndex - 1;
-      final item = _localQueue[nextIndex];
-      final url = resolveUrl(item);
-      await playLocal(
-        item,
-        url: url,
-        headers: headersFor(url),
-        queue: _localQueue,
-        index: nextIndex,
-      );
-      return;
-    }
-    if (contextual != null) {
+    } else if (isLocal && !_localEngine.canPrevious) {
+      operationMessage = '已经是本机播放队列第一首';
+      _notify();
+    } else if (contextual != null) {
       await _runContextAction(contextual);
     } else {
-      await _control(_api.previous);
+      await _control((engine, device) => engine.previous(device));
     }
   }
 
-  Future<void> next({
-    required String Function(MediaItem item) resolveUrl,
-    required Map<String, String> Function(String url) headersFor,
-  }) async {
+  Future<void> next() async {
     final contextual = context?.onNext;
     if (context?.isAudiobook == true && contextual != null) {
       await _runContextAction(contextual);
-      return;
-    }
-    if (isLocal) {
-      if (_localQueue.isEmpty ||
-          _localIndex < 0 ||
-          _localIndex >= _localQueue.length - 1) {
-        operationMessage = '已经是本机播放队列最后一首';
-        notifyListeners();
-        return;
-      }
-      final nextIndex = _localIndex + 1;
-      final item = _localQueue[nextIndex];
-      final url = resolveUrl(item);
-      await playLocal(
-        item,
-        url: url,
-        headers: headersFor(url),
-        queue: _localQueue,
-        index: nextIndex,
-      );
-      return;
-    }
-    if (contextual != null) {
+    } else if (isLocal && !_localEngine.canNext) {
+      operationMessage = '已经是本机播放队列最后一首';
+      _notify();
+    } else if (contextual != null) {
       await _runContextAction(contextual);
     } else {
-      await _control(_api.next);
+      await _control((engine, device) => engine.next(device));
     }
   }
 
-  Future<void> seek(double position) async {
-    if (isLocal) {
-      await localPlayer.seek(position);
-      _updateLocalStatus();
-      return;
-    }
+  Future<void> seek(double position) {
     final contextual = context?.onSeek;
-    if (contextual != null) {
-      await _runContextAction(() => contextual(position));
-    }
+    if (contextual != null) return _runContextAction(() => contextual(position));
+    return _control((engine, device) => engine.seek(device, position));
   }
 
   Future<void> setVolume(double value) =>
-      _control((device) => _api.setVolume(device, value.round()));
+      _control((engine, device) => engine.setVolume(device, value));
 
-  Future<void> diagnose() async {
-    await _run(() async {
-      await _api.testConnection();
-      final devices = await _api.getDevices();
-      diagnostic = devices.isEmpty
-          ? 'Songloft 已连接，但 MIoT 插件没有返回音箱。'
-          : '连接正常，MIoT 插件返回 ${devices.length} 台音箱。';
-    });
-  }
+  Future<void> diagnose() => _run(() async {
+        await _api.testConnection();
+        final devices = await _api.getDevices();
+        diagnostic = devices.isEmpty
+            ? 'Songloft 已连接，但 MIoT 插件没有返回音箱。'
+            : '连接正常，MIoT 插件返回 ${devices.length} 台音箱。';
+      });
 
-  void setAudiobookContext(PlaybackContext nextContext) {
-    context = nextContext;
+  void setAudiobookContext(PlaybackContext value) {
+    context = value;
     operationMessage = '已投送到 ${selectedDevice?.name ?? '当前音箱'}';
-    unawaited(_contextStore.save(nextContext));
-    notifyListeners();
+    unawaited(_contextStore.save(value));
+    _notify();
     unawaited(refreshStatus());
   }
 
@@ -377,13 +282,13 @@ class PlaybackController extends ChangeNotifier {
     unawaited(_contextStore.clear());
     context = null;
     operationMessage = '正在读取 Songloft 播放状态';
-    notifyListeners();
+    _notify();
     unawaited(refreshStatus());
   }
 
   void setDirectUrlContext(String url) {
     final uri = Uri.parse(url);
-    final nextContext = PlaybackContext(
+    final value = PlaybackContext(
       source: PlaybackSource.directUrl,
       title: uri.pathSegments.isEmpty || uri.pathSegments.last.isEmpty
           ? '音频直链'
@@ -391,53 +296,82 @@ class PlaybackController extends ChangeNotifier {
       subtitle: uri.host,
       mediaId: url,
     );
-    context = nextContext;
+    context = value;
     operationMessage = '直链已投送到 ${selectedDevice?.name ?? '当前音箱'}';
-    unawaited(_contextStore.save(nextContext));
-    notifyListeners();
+    unawaited(_contextStore.save(value));
+    _notify();
   }
 
   Future<void> _control(
-    Future<void> Function(SpeakerDevice device) action,
+    Future<void> Function(PlaybackEngine engine, SpeakerDevice device) action,
   ) async {
     final device = selectedDevice;
-    if (device == null || busy) return;
+    if (device == null) return;
     await _run(() async {
-      await action(device);
+      await action(_engine, device);
+      if (_engine.isLocal) _syncLocalMediaContext();
       operationMessage = '操作已发送到 ${device.name}';
       await refreshStatus(silent: true);
     });
   }
 
-  Future<void> _runContextAction(Future<void> Function() action) =>
-      _run(() async {
-        await action();
-        await refreshStatus(silent: true);
-      });
+  void _syncLocalMediaContext() {
+    final item = _localEngine.currentItem;
+    if (item == null || context?.isAudiobook == true) return;
+    context = PlaybackContext.local(
+      title: item.title,
+      subtitle: item.subtitle,
+      coverUrl: item.coverUrl,
+      mediaId: '${item.id}',
+      duration: item.duration,
+    );
+  }
 
-  Future<void> _run(Future<void> Function() action) async {
-    if (busy) return;
-    busy = true;
-    diagnostic = null;
-    notifyListeners();
+  Future<void> _runContextAction(Future<void> Function() action) async {
     try {
+      // Audiobook callbacks re-enter this controller through playLocalUrl.
+      // Do not hold the outer busy lock or the actual chapter play is dropped.
       await action();
+      await refreshStatus(silent: true);
     } catch (error) {
       diagnostic = error.toString();
       phase = PlaybackPhase.error;
-    } finally {
-      busy = false;
-      notifyListeners();
+      _notify();
     }
+  }
+
+  Future<void> _run(Future<void> Function() action) async {
+    if (busy) return;
+    final generation = _generation.current;
+    busy = true;
+    diagnostic = null;
+    _notify();
+    try {
+      await action();
+    } catch (error) {
+      if (_generation.isCurrent(generation)) {
+        diagnostic = error.toString();
+        phase = PlaybackPhase.error;
+      }
+    } finally {
+      if (_generation.isCurrent(generation)) busy = false;
+      _notify();
+    }
+  }
+
+  void _notify() {
+    if (!_disposed) notifyListeners();
   }
 
   @override
   void dispose() {
+    _disposed = true;
+    _generation.advance();
     _statusTimer?.cancel();
     _positionSubscription?.cancel();
     _durationSubscription?.cancel();
     _playerStateSubscription?.cancel();
-    unawaited(localPlayer.dispose());
+    unawaited(_localEngine.dispose());
     super.dispose();
   }
 }
