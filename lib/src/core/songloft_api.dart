@@ -31,7 +31,41 @@ class SongloftApi {
   Map<String, String> get _headers => {
         'Content-Type': 'application/json',
         if (_accessToken != null) 'Authorization': 'Bearer $_accessToken',
-      };
+  };
+
+  /// Songloft 返回的播放地址可能是相对地址，或由服务端配置生成的
+  /// localhost/127.0.0.1 地址。手机播放时应改用用户实际填写的服务地址。
+  String resolveAudioUrl(String rawUrl) {
+    final value = rawUrl.trim();
+    final base = Uri.parse(config.normalizedBaseUrl);
+    var uri = Uri.tryParse(value);
+    if (uri == null) return value;
+    if (!uri.isAbsolute) uri = base.resolve(value);
+
+    final isLoopback = uri.host == 'localhost' ||
+        uri.host == '127.0.0.1' ||
+        uri.host == '0.0.0.0' ||
+        uri.host == '::1';
+    if (isLoopback) {
+      uri = uri.replace(
+        scheme: base.scheme,
+        host: base.host,
+        port: base.hasPort ? base.port : null,
+      );
+    }
+    return uri.toString();
+  }
+
+  Map<String, String> audioHeadersFor(String rawUrl) {
+    final token = _accessToken;
+    final uri = Uri.tryParse(rawUrl);
+    final base = Uri.tryParse(config.normalizedBaseUrl);
+    if (token == null || uri == null || base == null) return const {};
+    final sameOrigin = uri.scheme == base.scheme &&
+        uri.host == base.host &&
+        uri.port == base.port;
+    return sameOrigin ? {'Authorization': 'Bearer $token'} : const {};
+  }
 
   Future<void> login() async {
     final response = await _client
@@ -136,11 +170,6 @@ class SongloftApi {
 
   Future<void> togglePlayback(SpeakerDevice device) =>
       _postMiot('/player/toggle', device);
-
-  Future<void> seek(SpeakerDevice device, double position) =>
-      _postMiot('/player/seek', device, {
-        'position': position.clamp(0, 99999999),
-      });
 
   Future<void> playUrl(SpeakerDevice device, String url) =>
       _postMiot('/mina/play-url', device, {'url': url});
