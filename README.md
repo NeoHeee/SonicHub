@@ -2,9 +2,7 @@
 
 > 多音源智能音箱控制中心
 
-SonicHub 是面向 Android 的智能音箱控制客户端。它将 Songloft、Audiobookshelf、
-Subsonic/Navidrome、LXBridge 与音频直链统一为可扩展音源，并通过 Songloft 的
-MIoT 插件把内容推送到智能音箱。
+SonicHub 是面向 Android 的智能音箱控制客户端。它将 Songloft、Audiobookshelf、与音频直链统一为可扩展音源，并通过 Songloft 的MIoT 插件把内容推送到智能音箱。
 
 ## 当前进度
 
