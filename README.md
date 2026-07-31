@@ -2,7 +2,8 @@
 
 > 多音源智能音箱控制中心
 
-SonicHub 是面向 Android 的智能音箱控制客户端。它将 Songloft、Audiobookshelf、与音频直链统一为可扩展音源，并通过 Songloft 的MIoT 插件把内容推送到智能音箱。
+SonicHub 是面向 Android 的智能音箱控制客户端。
+它将 Songloft、Audiobookshelf、与音频直链统一为可扩展音源，并通过 Songloft 的MIoT 插件把内容推送到智能音箱。
 
 ## 当前进度
 
@@ -17,8 +18,7 @@ SonicHub 是面向 Android 的智能音箱控制客户端。它将 Songloft、Au
 - 全局统一加载、空状态、错误提示和重试反馈
 - 固定 Android Release 签名与 GitHub Actions 构建
 
-下载管理、睡眠定时、播放速度和 Subsonic/Navidrome/LXBridge 仍保留为后续扩展，
-在对应服务端接口和设备能力具备前不会显示为虚假可用功能。
+下载管理、睡眠定时、播放速度和 Subsonic/Navidrome/LXBridge 仍保留为后续扩展，在对应服务端接口和设备能力具备前不会显示为虚假可用功能。
 
 ## 使用要求
 
@@ -28,22 +28,6 @@ SonicHub 是面向 Android 的智能音箱控制客户端。它将 Songloft、Au
 - Android 8.0 或更高版本（首版目标）
 - 音箱可以访问所投送的音频 URL
 
-## 开发
-
-```bash
-flutter pub get
-flutter analyze
-flutter test
-flutter run
-```
-
-若仓库尚未生成 Android 平台目录：
-
-```bash
-flutter create --platforms=android --org com.neo --project-name sonichub .
-```
-
-Android 包名规划为 `com.neo.sonichub`，桌面名称为“音枢”。
 
 ## 架构原则
 
@@ -57,5 +41,4 @@ Android 包名规划为 `com.neo.sonichub`，桌面名称为“音枢”。
 
 ## 许可与声明
 
-SonicHub 是独立的互操作客户端，与 Songloft、MIoT、小米及相关商标持有人无
-官方隶属或背书关系。本项目不包含 MIoT 插件实现及任何第三方账号协议代码。
+SonicHub 是独立的互操作客户端，与 Songloft、MIoT、小米及相关商标持有人无官方隶属或背书关系。本项目不包含 MIoT 插件实现及任何第三方账号协议代码。
