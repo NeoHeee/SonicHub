@@ -227,10 +227,11 @@ class _MainShellState extends State<MainShell> {
   ]) async {
     setState(() => _busy = true);
     try {
-      await _localPlayer.playUrl(url.trim(), headers: headers);
-      if (startPosition > 0) {
-        await _localPlayer.seek(startPosition);
-      }
+      await _localPlayer.playUrl(
+        url.trim(),
+        headers: headers,
+        initialPosition: startPosition,
+      );
       if (mounted) {
         await _playbackStore.clear();
         final uri = Uri.parse(url);
