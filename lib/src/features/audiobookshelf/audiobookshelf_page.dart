@@ -19,7 +19,11 @@ class AudiobookshelfPage extends StatefulWidget {
     Future<void> Function() onNext,
     Future<void> Function(double position) onSeek,
   ) onPlayed;
-  final Future<void> Function(String url, double startPosition)? onLocalPlayed;
+  final Future<void> Function(
+    String url,
+    double startPosition,
+    Map<String, String> headers
+  )? onLocalPlayed;
   final Future<double> Function()? localPosition;
   @override State<AudiobookshelfPage> createState() => _AudiobookshelfPageState();
 }
@@ -112,7 +116,11 @@ class _AudiobookshelfPageState extends State<AudiobookshelfPage> {
     try {
       final playback = await _api!.createPlayback(detail, position: position);
       if (device.isLocal) {
-        await widget.onLocalPlayed?.call(playback.url, playback.trackPosition);
+        await widget.onLocalPlayed?.call(
+          playback.url,
+          playback.trackPosition,
+          playback.headers,
+        );
       } else {
         await widget.songloftApi.playUrl(device, playback.url);
       }

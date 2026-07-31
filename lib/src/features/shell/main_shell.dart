@@ -2,12 +2,11 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:just_audio/just_audio.dart';
 
 import '../../core/audiobookshelf_api.dart';
 import '../../core/config_store.dart';
-import '../../core/local_audio_player.dart';
 import '../../core/models.dart';
+import '../../core/playback_controller.dart';
 import '../../core/playback_context.dart';
 import '../audiobookshelf/audiobookshelf_page.dart';
 import '../../core/server_config.dart';
@@ -27,62 +26,40 @@ class MainShell extends StatefulWidget {
 class _MainShellState extends State<MainShell> {
   int _index = 0;
   late Future<List<SpeakerDevice>> _devices;
-  SpeakerDevice? _selectedDevice;
-  DeviceStatus? _status;
-  String? _diagnostic;
-  bool _busy = false;
-  PlaybackContext? _playback;
-  String? _operationMessage;
+  late final PlaybackController _controller;
   final _configStore = ConfigStore();
-  final _playbackStore = PlaybackContextStore();
-  Timer? _statusTimer;
-  final _localPlayer = LocalAudioPlayer();
-  List<MediaItem> _localQueue = const [];
-  int _localIndex = -1;
-  StreamSubscription<Duration>? _localPositionSubscription;
-  StreamSubscription<Duration?>? _localDurationSubscription;
-  StreamSubscription<PlayerState>? _localStateSubscription;
+
+  SpeakerDevice? get _selectedDevice => _controller.selectedDevice;
+  DeviceStatus? get _status => _controller.status;
+  String? get _diagnostic => _controller.diagnostic;
+  bool get _busy => _controller.busy;
+  PlaybackContext? get _playback => _controller.context;
+  String? get _operationMessage => _controller.operationMessage;
 
   @override
   void initState() {
     super.initState();
-    // Restore the source context before querying the speaker. Otherwise a
-    // stale Songloft current_song can replace the audiobook after restart.
-    _devices = _restorePlayback().then((_) => _loadDevices());
-    _localPositionSubscription = _localPlayer.positionStream.listen((_) => _updateLocalStatus());
-    _localDurationSubscription = _localPlayer.durationStream.listen((_) => _updateLocalStatus());
-    _localStateSubscription = _localPlayer.playerStateStream.listen((_) => _updateLocalStatus());
-    _statusTimer = Timer.periodic(const Duration(seconds: 2), (_) {
-      if (mounted && !_busy && _selectedDevice != null) {
-        _refreshStatus(silent: true);
-      }
-    });
+    _controller = PlaybackController(api: widget.api)
+      ..addListener(_onPlaybackChanged);
+    _devices = _controller.initialize().then((_) => _loadDevices());
   }
 
-  Future<void> _restorePlayback() async {
-    final restored = await _playbackStore.load();
-    if (!mounted || restored == null) return;
-    setState(() => _playback = restored);
-  }
-
-  void _savePlayback(PlaybackContext context) {
-    unawaited(_playbackStore.save(context));
+  void _onPlaybackChanged() {
+    if (mounted) setState(() {});
   }
 
   @override
   void dispose() {
-    _statusTimer?.cancel();
-    _localPositionSubscription?.cancel();
-    _localDurationSubscription?.cancel();
-    _localStateSubscription?.cancel();
-    _localPlayer.dispose();
+    _controller
+      ..removeListener(_onPlaybackChanged)
+      ..dispose();
     super.dispose();
   }
 
   Future<List<SpeakerDevice>> _loadDevices() async {
     final devices = await widget.api.getDevices();
     final saved = await _configStore.loadSelectedDevice();
-    if (devices.isNotEmpty && _selectedDevice == null) {
+    if (devices.isNotEmpty && _controller.selectedDevice == null) {
       final selected = saved == null
           ? devices.first
           : devices.firstWhere(
@@ -91,8 +68,7 @@ class _MainShellState extends State<MainShell> {
                   item.accountId == saved.accountId,
               orElse: () => devices.first,
             );
-      if (mounted) setState(() => _selectedDevice = selected);
-      await _refreshStatus();
+      await _controller.selectDevice(selected);
     }
     return devices;
   }
@@ -103,83 +79,30 @@ class _MainShellState extends State<MainShell> {
     try {
       final devices = await future;
       if (!mounted) return;
-      final previous = _selectedDevice;
-      setState(() {
-        if (previous?.isLocal == true) {
-          _selectedDevice = SpeakerDevice.local;
-        } else if (devices.isNotEmpty) {
-          _selectedDevice = devices.firstWhere(
-            (item) => item.id == previous?.id && item.accountId == previous?.accountId,
-            orElse: () => devices.first,
-          );
-        } else {
-          _selectedDevice = null;
-        }
-      });
-      await _refreshStatus();
+      final previous = _controller.selectedDevice;
+      final next = previous?.isLocal == true
+          ? SpeakerDevice.local
+          : devices.isEmpty
+              ? null
+              : devices.firstWhere(
+                  (item) =>
+                      item.id == previous?.id &&
+                      item.accountId == previous?.accountId,
+                  orElse: () => devices.first,
+                );
+      await _controller.selectDevice(next);
     } catch (_) {}
   }
 
   Future<void> _selectDevice(SpeakerDevice? device) async {
-    setState(() {
-      _selectedDevice = device;
-      _status = null;
-      _playback = null;
-      _operationMessage = '已切换到 ${device?.name ?? '未选择设备'}';
-    });
     if (device != null && !device.isLocal) {
       await _configStore.saveSelectedDevice(device.accountId, device.id);
     }
-    await _refreshStatus();
+    await _controller.selectDevice(device);
   }
 
-  Future<void> _refreshStatus({bool silent = false}) async {
-    final device = _selectedDevice;
-    if (device == null) return;
-    if (device.isLocal) {
-      _updateLocalStatus();
-      return;
-    }
-    if (!silent) {
-      setState(() {
-        _busy = true;
-        _diagnostic = null;
-      });
-    }
-    try {
-      final status = await widget.api.getStatus(device);
-      if (mounted) {
-        setState(() {
-          _status = status;
-          if (status.currentSong != null &&
-              (_playback == null ||
-                  _playback!.source == PlaybackSource.songloft)) {
-            _playback = PlaybackContext.songloft(status.currentSong!);
-          }
-        });
-      }
-    } catch (error) {
-      if (mounted) setState(() => _diagnostic = error.toString());
-    } finally {
-      if (!silent && mounted) setState(() => _busy = false);
-    }
-  }
-
-  void _updateLocalStatus() {
-    if (!mounted || _selectedDevice?.isLocal != true) return;
-    setState(() {
-      _status = DeviceStatus(
-        state: _localPlayer.isPlaying ? 'playing' : 'paused',
-        volume: null,
-        position: _localPlayer.position,
-        duration: _localPlayer.duration,
-        currentIndex: -1,
-        playlistId: 0,
-        playlistName: '本机播放',
-        currentSong: null,
-      );
-    });
-  }
+  Future<void> _refreshStatus({bool silent = false}) =>
+      _controller.refreshStatus(silent: silent);
 
   Future<void> _playLocal(
     MediaItem song, {
@@ -187,118 +110,32 @@ class _MainShellState extends State<MainShell> {
     int index = -1,
   }) async {
     if (song.playUrl.trim().isEmpty) {
-      setState(() => _diagnostic = '这首歌曲没有可用的播放地址');
       return;
     }
-    setState(() => _busy = true);
-    try {
-      final url = widget.api.resolveAudioUrl(song.playUrl);
-      await _localPlayer.playUrl(
+    final url = widget.api.resolveAudioUrl(song.playUrl);
+    await _controller.playLocal(
+      song,
+      url: url,
+      headers: widget.api.audioHeadersFor(url),
+      queue: queue,
+      index: index,
+    );
+  }
+
+  Future<void> _playLocalUrl(
+    String url, [
+    double startPosition = 0,
+    Map<String, String> headers = const {},
+  ]) =>
+      _controller.playLocalUrl(
         url,
-        headers: widget.api.audioHeadersFor(url),
+        initialPosition: startPosition,
+        headers: headers,
       );
-      if (mounted) {
-        await _playbackStore.clear();
-        setState(() {
-          _localQueue = queue.isEmpty ? [song] : List<MediaItem>.of(queue);
-          _localIndex = queue.isEmpty ? 0 : index;
-          _playback = PlaybackContext.local(
-            title: song.title,
-            subtitle: song.subtitle,
-            coverUrl: song.coverUrl,
-            mediaId: '${song.id}',
-            duration: song.duration,
-          );
-          _operationMessage = '正在本机播放';
-        });
-        _updateLocalStatus();
-      }
-    } catch (error) {
-      if (mounted) setState(() => _diagnostic = '本机播放失败：$error');
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
 
-  Future<void> _playLocalUrl(String url, [double startPosition = 0]) async {
-    setState(() => _busy = true);
-    try {
-      await _localPlayer.playUrl(url.trim());
-      if (startPosition > 0) {
-        await _localPlayer.seek(startPosition);
-      }
-      if (mounted) {
-        await _playbackStore.clear();
-        final uri = Uri.parse(url);
-        setState(() {
-          _localQueue = const [];
-          _localIndex = -1;
-          _playback = PlaybackContext.local(
-            title: uri.pathSegments.isEmpty || uri.pathSegments.last.isEmpty
-                ? '音频直链'
-                : Uri.decodeComponent(uri.pathSegments.last),
-            subtitle: uri.host,
-            mediaId: url,
-          );
-          _operationMessage = '正在本机播放';
-        });
-        _updateLocalStatus();
-      }
-    } catch (error) {
-      if (mounted) setState(() => _diagnostic = '本机播放失败：$error');
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  Future<void> _togglePlayback() async {
-    if (_selectedDevice?.isLocal == true) {
-      if (_localPlayer.isPlaying) {
-        await _localPlayer.pause();
-      } else {
-        await _localPlayer.resume();
-      }
-      _updateLocalStatus();
-      return;
-    }
-    await _control(widget.api.togglePlayback);
-  }
-
-  Future<void> _stopPlayback() async {
-    if (_selectedDevice?.isLocal == true) {
-      await _localPlayer.stop();
-      if (mounted) {
-        setState(() => _operationMessage = '本机播放已停止');
-        _updateLocalStatus();
-      }
-      return;
-    }
-    await _control(widget.api.stop);
-  }
-
-  Future<void> _control(Future<void> Function(SpeakerDevice) action) async {
-    final device = _selectedDevice;
-    if (device == null || _busy) return;
-    setState(() => _busy = true);
-    try {
-      await action(device);
-      if (mounted) setState(() => _operationMessage = '操作已发送到 ${device.name}');
-      await _refreshStatus();
-    } catch (error) {
-      if (mounted) {
-        setState(() => _diagnostic = error.toString());
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(error.toString())),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  Future<void> _setVolume(double value) async {
-    await _control((device) => widget.api.setVolume(device, value.round()));
-  }
+  Future<void> _togglePlayback() => _controller.toggle();
+  Future<void> _stopPlayback() => _controller.stop();
+  Future<void> _setVolume(double value) => _controller.setVolume(value);
 
   void _showAudiobook(
     AbsBook book,
@@ -328,133 +165,24 @@ class _MainShellState extends State<MainShell> {
         onNext: onNext,
         onSeek: local ? onSeek : null,
       );
-    setState(() {
-      _playback = context;
-      _operationMessage = '已投送到 ${_selectedDevice?.name ?? '当前音箱'}';
-    });
-    _savePlayback(context);
-    _refreshStatus();
+    _controller.setAudiobookContext(context);
   }
 
-  void _clearExternalPlayback() {
-    unawaited(_playbackStore.clear());
-    setState(() {
-      _playback = null;
-      _operationMessage = '正在读取 Songloft 播放状态';
-    });
-    _refreshStatus();
-  }
+  void _clearExternalPlayback() => _controller.clearExternalContext();
 
-  void _showDirectUrl(String url) {
-    final uri = Uri.parse(url);
-    final context = PlaybackContext(
-        source: PlaybackSource.directUrl,
-        title: uri.pathSegments.isEmpty || uri.pathSegments.last.isEmpty
-            ? '音频直链'
-            : Uri.decodeComponent(uri.pathSegments.last),
-        subtitle: uri.host,
-        mediaId: url,
+  void _showDirectUrl(String url) => _controller.setDirectUrlContext(url);
+
+  Future<void> _previous() => _controller.previous(
+        resolveUrl: widget.api.resolveAudioUrl,
+        headersFor: widget.api.audioHeadersFor,
       );
-    setState(() {
-      _playback = context;
-      _operationMessage = '直链已投送到 ${_selectedDevice?.name ?? '当前音箱'}';
-    });
-    _savePlayback(context);
-  }
 
-  Future<void> _previous() async {
-    if (_selectedDevice?.isLocal == true) {
-      if (_localQueue.isEmpty || _localIndex <= 0) {
-        setState(() => _operationMessage = '已经是本机播放队列第一首');
-        return;
-      }
-      await _playLocal(
-        _localQueue[_localIndex - 1],
-        queue: _localQueue,
-        index: _localIndex - 1,
+  Future<void> _next() => _controller.next(
+        resolveUrl: widget.api.resolveAudioUrl,
+        headersFor: widget.api.audioHeadersFor,
       );
-      return;
-    }
-    final contextualPrevious = _playback?.onPrevious;
-    if (contextualPrevious == null) {
-      if (_playback?.isAudiobook == true) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('请进入有声书页面继续收听后使用章节控制')),
-          );
-        }
-        return;
-      }
-      await _control(widget.api.previous);
-      return;
-    }
-    await _runContextAction(contextualPrevious);
-  }
 
-  Future<void> _next() async {
-    if (_selectedDevice?.isLocal == true) {
-      if (_localQueue.isEmpty || _localIndex < 0 || _localIndex >= _localQueue.length - 1) {
-        setState(() => _operationMessage = '已经是本机播放队列最后一首');
-        return;
-      }
-      await _playLocal(
-        _localQueue[_localIndex + 1],
-        queue: _localQueue,
-        index: _localIndex + 1,
-      );
-      return;
-    }
-    final contextualNext = _playback?.onNext;
-    if (contextualNext == null) {
-      if (_playback?.isAudiobook == true) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('请进入有声书页面继续收听后使用章节控制')),
-          );
-        }
-        return;
-      }
-      await _control(widget.api.next);
-      return;
-    }
-    await _runContextAction(contextualNext);
-  }
-
-  Future<void> _runContextAction(Future<void> Function() action) async {
-    if (_busy) return;
-    setState(() => _busy = true);
-    try {
-      await action();
-      await _refreshStatus(silent: true);
-    } catch (error) {
-      if (mounted) {
-        setState(() => _diagnostic = error.toString());
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(error.toString())),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  Future<void> _seek(double position) async {
-    if (_selectedDevice?.isLocal == true) {
-      await _localPlayer.seek(position);
-      _updateLocalStatus();
-      return;
-    }
-    final contextualSeek = _playback?.onSeek;
-    if (contextualSeek != null) {
-      await _runContextAction(() => contextualSeek(position));
-      return;
-    }
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('当前音箱播放方式不支持进度跳转，请使用章节切换')),
-      );
-    }
-  }
+  Future<void> _seek(double position) => _controller.seek(position);
 
   Future<void> _logout() async {
     final confirmed = await showDialog<bool>(
@@ -477,26 +205,7 @@ class _MainShellState extends State<MainShell> {
     if (confirmed == true && mounted) Navigator.of(context).pop();
   }
 
-  Future<void> _diagnose() async {
-    setState(() {
-      _busy = true;
-      _diagnostic = null;
-    });
-    try {
-      await widget.api.testConnection();
-      final devices = await widget.api.getDevices();
-      if (!mounted) return;
-      setState(() {
-        _diagnostic = devices.isEmpty
-            ? 'Songloft 已连接，但 MIoT 插件没有返回音箱。'
-            : '连接正常，MIoT 插件返回 ${devices.length} 台音箱。';
-      });
-    } catch (error) {
-      if (mounted) setState(() => _diagnostic = error.toString());
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
+  Future<void> _diagnose() => _controller.diagnose();
 
   @override
   Widget build(BuildContext context) {
@@ -504,6 +213,7 @@ class _MainShellState extends State<MainShell> {
       _HomePage(
         selectedDevice: _selectedDevice,
         status: _status,
+        capabilities: _controller.capabilities,
         busy: _busy,
         diagnostic: _diagnostic,
         onRefresh: _refreshStatus,
@@ -527,7 +237,8 @@ class _MainShellState extends State<MainShell> {
                     api: widget.api,
                     device: _selectedDevice!,
                     onPlayed: _showDirectUrl,
-                    localPlayer: _selectedDevice!.isLocal ? _localPlayer : null,
+                    localPlayer:
+                        _selectedDevice!.isLocal ? _controller.localPlayer : null,
                     onLocalPlayed: _playLocalUrl,
                   ),
                 ).then((_) => _refreshStatus()),
@@ -547,7 +258,8 @@ class _MainShellState extends State<MainShell> {
                     api: widget.api,
                     device: _selectedDevice!,
                     onPlayed: _showDirectUrl,
-                    localPlayer: _selectedDevice!.isLocal ? _localPlayer : null,
+                    localPlayer:
+                        _selectedDevice!.isLocal ? _controller.localPlayer : null,
                     onLocalPlayed: _playLocalUrl,
                   ),
                 ).then((_) => _refreshStatus()),
@@ -557,7 +269,7 @@ class _MainShellState extends State<MainShell> {
         device: _selectedDevice,
         onPlayed: _showAudiobook,
         onLocalPlayed: _playLocalUrl,
-        localPosition: () async => _localPlayer.position,
+        localPosition: () async => _controller.localPlayer.position,
       ),
       SpeakersPage(
         api: widget.api,
@@ -623,6 +335,7 @@ class _HomePage extends StatelessWidget {
   const _HomePage({
     required this.selectedDevice,
     required this.status,
+    required this.capabilities,
     required this.busy,
     required this.diagnostic,
     required this.onRefresh,
@@ -642,6 +355,7 @@ class _HomePage extends StatelessWidget {
 
   final SpeakerDevice? selectedDevice;
   final DeviceStatus? status;
+  final PlaybackCapabilities capabilities;
   final bool busy;
   final String? diagnostic;
   final Future<void> Function() onRefresh;
@@ -815,7 +529,8 @@ class _HomePage extends StatelessWidget {
                   duration: duration,
                   enabled: selectedDevice?.isLocal == true &&
                       !busy &&
-                      duration > 0,
+                      duration > 0 &&
+                      capabilities.canSeek,
                   onSeek: onSeek,
                 ),
                 Row(
@@ -840,13 +555,14 @@ class _HomePage extends StatelessWidget {
                     IconButton(
                       tooltip: isAudiobook ? '上一章' : '上一首',
                       iconSize: 38,
-                      onPressed: selectedDevice == null || busy ? null : onPrevious,
+                      onPressed:
+                          busy || !capabilities.canPrevious ? null : onPrevious,
                       icon: const Icon(Icons.skip_previous_rounded),
                     ),
                     IconButton(
                       tooltip: '停止',
                       iconSize: 30,
-                      onPressed: selectedDevice == null || busy ? null : onStop,
+                      onPressed: busy || !capabilities.canStop ? null : onStop,
                       icon: const Icon(Icons.stop_rounded),
                     ),
                     SizedBox(
@@ -854,7 +570,8 @@ class _HomePage extends StatelessWidget {
                       height: compact ? 58 : 64,
                       child: IconButton.filled(
                         tooltip: status?.state == 'playing' ? '暂停' : '播放',
-                        onPressed: selectedDevice == null || busy ? null : onToggle,
+                        onPressed:
+                            busy || !capabilities.canToggle ? null : onToggle,
                         iconSize: 34,
                         icon: Icon(
                           status?.state == 'playing'
@@ -866,7 +583,7 @@ class _HomePage extends StatelessWidget {
                     IconButton(
                       tooltip: isAudiobook ? '下一章' : '下一首',
                       iconSize: 38,
-                      onPressed: selectedDevice == null || busy ? null : onNext,
+                      onPressed: busy || !capabilities.canNext ? null : onNext,
                       icon: const Icon(Icons.skip_next_rounded),
                     ),
                   ],
@@ -1554,7 +1271,7 @@ class _SettingsPage extends StatelessWidget {
           const SizedBox(height: 24),
           const ListTile(
             title: Text('版本'),
-            subtitle: Text('0.6.0 统一音源与页面体验版'),
+            subtitle: Text('v0.7.0-alpha.1 播放内核重构预览版'),
           ),
         ],
       ),
