@@ -9,6 +9,8 @@ class AudiobookshelfConfig {
   final String apiKey;
   final String libraryId;
   String get normalizedBaseUrl => baseUrl.trim().replaceFirst(RegExp(r'/+$'), '');
+  Map<String, String> get audioHeaders =>
+      {'Authorization': 'Bearer ${apiKey.trim()}'};
   AudiobookshelfConfig copyWith({String? libraryId}) => AudiobookshelfConfig(baseUrl: baseUrl, apiKey: apiKey, libraryId: libraryId ?? this.libraryId);
 }
 
@@ -113,12 +115,14 @@ class AbsBookDetail {
 class AbsPlayback {
   const AbsPlayback({
     required this.url,
+    required this.headers,
     required this.bookPosition,
     required this.trackPosition,
     required this.duration,
     required this.exactTrack,
   });
   final String url;
+  final Map<String, String> headers;
   /// Position represented by the beginning of the selected audio track.
   final double bookPosition;
   /// Offset inside the selected track at which playback should start.
@@ -179,7 +183,7 @@ class AudiobookshelfApi {
 
   Future<AbsPlayback> createPlayback(AbsBookDetail detail, {double? position}) async {
     final body = await _post('/api/items/${detail.book.id}/play', {
-      'deviceInfo': {'deviceId': 'sonichub', 'deviceName': '音枢 SonicHub', 'clientName': 'SonicHub', 'clientVersion': '0.3.0'},
+      'deviceInfo': {'deviceId': 'sonichub', 'deviceName': '音枢 SonicHub', 'clientName': 'SonicHub', 'clientVersion': '0.7.0-alpha.2'},
       'supportedMimeTypes': ['audio/mpeg', 'audio/mp4', 'audio/aac', 'audio/flac'],
       'forceDirectPlay': true,
       'mediaPlayer': 'sonichub-miot',
@@ -195,11 +199,12 @@ class AudiobookshelfApi {
       if (target >= track.startOffset && (track.duration <= 0 || target < end)) { selected = track; break; }
     }
     if (selected.contentUrl.isEmpty) throw const AudiobookshelfException('音轨缺少播放地址');
-    final uri = selected.contentUrl.startsWith('http') ? Uri.parse(selected.contentUrl) : Uri.parse('${config.normalizedBaseUrl}${selected.contentUrl}');
+    final uri = Uri.parse(config.normalizedBaseUrl).resolve(selected.contentUrl);
     final url = uri.replace(queryParameters: {...uri.queryParameters, 'token': config.apiKey.trim()}).toString();
     final withinTrack = (target - selected.startOffset).clamp(0, selected.duration).toDouble();
     return AbsPlayback(
       url: url,
+      headers: config.audioHeaders,
       bookPosition: selected.startOffset,
       trackPosition: withinTrack,
       duration: detail.book.duration,

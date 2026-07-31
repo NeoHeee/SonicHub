@@ -1,6 +1,9 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sonichub/src/core/audiobookshelf_api.dart';
 import 'package:sonichub/src/core/models.dart';
+import 'package:sonichub/src/core/playback_controller.dart';
 import 'package:sonichub/src/core/playback_context.dart';
+import 'package:sonichub/src/core/playback_engine.dart';
 import 'package:sonichub/src/core/server_config.dart';
 
 void main() {
@@ -91,5 +94,41 @@ void main() {
 
     expect(context.isAudiobook, isTrue);
     expect(context.sourceLabel, 'Audiobookshelf');
+  });
+
+  test('Audiobookshelf audio requests carry bearer authentication', () {
+    const config = AudiobookshelfConfig(
+      baseUrl: 'https://books.example.com/',
+      apiKey: ' secret-token ',
+    );
+
+    expect(config.audioHeaders, {
+      'Authorization': 'Bearer secret-token',
+    });
+  });
+
+  test('playback capabilities expose supported controls independently', () {
+    const capabilities = PlaybackCapabilities(
+      canToggle: true,
+      canStop: true,
+      canPrevious: false,
+      canNext: true,
+      canSeek: false,
+    );
+
+    expect(capabilities.canToggle, isTrue);
+    expect(capabilities.canPrevious, isFalse);
+    expect(capabilities.canNext, isTrue);
+    expect(capabilities.canSeek, isFalse);
+  });
+
+  test('request generation rejects stale asynchronous results', () {
+    final generation = RequestGeneration();
+    final firstRequest = generation.current;
+
+    generation.advance();
+
+    expect(generation.isCurrent(firstRequest), isFalse);
+    expect(generation.isCurrent(generation.current), isTrue);
   });
 }
