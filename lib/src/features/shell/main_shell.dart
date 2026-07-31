@@ -36,6 +36,8 @@ class _MainShellState extends State<MainShell> {
   final _configStore = ConfigStore();
   Timer? _statusTimer;
   final _localPlayer = LocalAudioPlayer();
+  List<MediaItem> _localQueue = const [];
+  int _localIndex = -1;
   StreamSubscription<Duration>? _localPositionSubscription;
   StreamSubscription<Duration?>? _localDurationSubscription;
   StreamSubscription<PlayerState>? _localStateSubscription;
@@ -166,16 +168,26 @@ class _MainShellState extends State<MainShell> {
     });
   }
 
-  Future<void> _playLocal(MediaItem song) async {
+  Future<void> _playLocal(
+    MediaItem song, {
+    List<MediaItem> queue = const [],
+    int index = -1,
+  }) async {
     if (song.playUrl.trim().isEmpty) {
       setState(() => _diagnostic = '这首歌曲没有可用的播放地址');
       return;
     }
     setState(() => _busy = true);
     try {
-      await _localPlayer.playUrl(song.playUrl);
+      final url = widget.api.resolveAudioUrl(song.playUrl);
+      await _localPlayer.playUrl(
+        url,
+        headers: widget.api.audioHeadersFor(url),
+      );
       if (mounted) {
         setState(() {
+          _localQueue = queue.isEmpty ? [song] : List<MediaItem>.of(queue);
+          _localIndex = queue.isEmpty ? 0 : index;
           _playback = PlaybackContext.local(
             title: song.title,
             subtitle: song.subtitle,
@@ -197,10 +209,12 @@ class _MainShellState extends State<MainShell> {
   Future<void> _playLocalUrl(String url) async {
     setState(() => _busy = true);
     try {
-      await _localPlayer.playUrl(url);
+      await _localPlayer.playUrl(url.trim());
       if (mounted) {
         final uri = Uri.parse(url);
         setState(() {
+          _localQueue = const [];
+          _localIndex = -1;
           _playback = PlaybackContext.local(
             title: uri.pathSegments.isEmpty || uri.pathSegments.last.isEmpty
                 ? '音频直链'
@@ -230,6 +244,18 @@ class _MainShellState extends State<MainShell> {
       return;
     }
     await _control(widget.api.togglePlayback);
+  }
+
+  Future<void> _stopPlayback() async {
+    if (_selectedDevice?.isLocal == true) {
+      await _localPlayer.stop();
+      if (mounted) {
+        setState(() => _operationMessage = '本机播放已停止');
+        _updateLocalStatus();
+      }
+      return;
+    }
+    await _control(widget.api.stop);
   }
 
   Future<void> _control(Future<void> Function(SpeakerDevice) action) async {
@@ -312,7 +338,15 @@ class _MainShellState extends State<MainShell> {
 
   Future<void> _previous() async {
     if (_selectedDevice?.isLocal == true) {
-      setState(() => _operationMessage = '本机播放暂不支持切换队列');
+      if (_localQueue.isEmpty || _localIndex <= 0) {
+        setState(() => _operationMessage = '已经是本机播放队列第一首');
+        return;
+      }
+      await _playLocal(
+        _localQueue[_localIndex - 1],
+        queue: _localQueue,
+        index: _localIndex - 1,
+      );
       return;
     }
     final contextualPrevious = _playback?.onPrevious;
@@ -325,7 +359,15 @@ class _MainShellState extends State<MainShell> {
 
   Future<void> _next() async {
     if (_selectedDevice?.isLocal == true) {
-      setState(() => _operationMessage = '本机播放暂不支持切换队列');
+      if (_localQueue.isEmpty || _localIndex < 0 || _localIndex >= _localQueue.length - 1) {
+        setState(() => _operationMessage = '已经是本机播放队列最后一首');
+        return;
+      }
+      await _playLocal(
+        _localQueue[_localIndex + 1],
+        queue: _localQueue,
+        index: _localIndex + 1,
+      );
       return;
     }
     final contextualNext = _playback?.onNext;
@@ -423,6 +465,7 @@ class _MainShellState extends State<MainShell> {
         onRefreshStatus: _refreshStatus,
         onPrevious: _previous,
         onToggle: _togglePlayback,
+        onStop: _stopPlayback,
         onNext: _next,
         onVolumeChanged: _setVolume,
         onSeek: _seek,
@@ -541,6 +584,7 @@ class _HomePage extends StatelessWidget {
     required this.onRefreshStatus,
     required this.onPrevious,
     required this.onToggle,
+    required this.onStop,
     required this.onNext,
     required this.onVolumeChanged,
     required this.onSeek,
@@ -559,6 +603,7 @@ class _HomePage extends StatelessWidget {
   final VoidCallback onRefreshStatus;
   final VoidCallback onPrevious;
   final VoidCallback onToggle;
+  final VoidCallback onStop;
   final VoidCallback onNext;
   final ValueChanged<double> onVolumeChanged;
   final ValueChanged<double> onSeek;
@@ -603,26 +648,36 @@ class _HomePage extends StatelessWidget {
         : statusPosition).toDouble();
 
     return Scaffold(
-      body: RefreshIndicator(
-        onRefresh: onRefresh,
-        child: Container(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [
-                scheme.primaryContainer.withValues(alpha: 0.82),
-                scheme.surface,
-                scheme.surface,
-              ],
-              stops: const [0, 0.55, 1],
-            ),
-          ),
-          child: SafeArea(
-            bottom: false,
-            child: ListView(
-              physics: const AlwaysScrollableScrollPhysics(),
-              padding: const EdgeInsets.fromLTRB(24, 10, 24, 28),
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          // The page sits above the bottom navigation bar. Keep the artwork
+          // responsive so the complete player remains visible on short phones.
+          final compact = constraints.maxHeight < 780;
+          final artworkSize = (constraints.maxHeight * 0.28)
+              .clamp(compact ? 180.0 : 200.0, compact ? 205.0 : 225.0)
+              .toDouble();
+          final sectionGap = compact ? 8.0 : 10.0;
+
+          return RefreshIndicator(
+            onRefresh: onRefresh,
+            child: Container(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    scheme.primaryContainer.withValues(alpha: 0.82),
+                    scheme.surface,
+                    scheme.surface,
+                  ],
+                  stops: const [0, 0.55, 1],
+                ),
+              ),
+              child: SafeArea(
+                bottom: false,
+                child: ListView(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  padding: EdgeInsets.fromLTRB(20, compact ? 0 : 4, 20, compact ? 6 : 10),
               children: [
                 Row(
                   children: [
@@ -644,38 +699,41 @@ class _HomePage extends StatelessWidget {
                     ),
                   ],
                 ),
-                const SizedBox(height: 20),
+                SizedBox(height: compact ? 4 : 8),
                 Center(
                   child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 360),
-                    child: AspectRatio(
-                      aspectRatio: isAudiobook ? 0.78 : 1,
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(28),
-                        child: DecoratedBox(
-                          decoration: BoxDecoration(
-                            color: scheme.surfaceContainerHighest,
-                            boxShadow: const [
-                              BoxShadow(
-                                blurRadius: 30,
-                                offset: Offset(0, 16),
-                                color: Color(0x33000000),
-                              ),
-                            ],
+                    constraints: BoxConstraints(maxWidth: artworkSize),
+                    child: SizedBox(
+                      height: artworkSize,
+                      child: AspectRatio(
+                        aspectRatio: isAudiobook ? 0.78 : 1,
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(24),
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              color: scheme.surfaceContainerHighest,
+                              boxShadow: const [
+                                BoxShadow(
+                                  blurRadius: 24,
+                                  offset: Offset(0, 12),
+                                  color: Color(0x33000000),
+                                ),
+                              ],
+                            ),
+                            child: coverUrl?.trim().isNotEmpty == true
+                                ? Image.network(
+                                    coverUrl!,
+                                    fit: BoxFit.cover,
+                                    errorBuilder: (_, __, ___) => _ArtworkFallback(isAudiobook: isAudiobook),
+                                  )
+                                : _ArtworkFallback(isAudiobook: isAudiobook),
                           ),
-                          child: coverUrl?.trim().isNotEmpty == true
-                              ? Image.network(
-                                  coverUrl!,
-                                  fit: BoxFit.cover,
-                                  errorBuilder: (_, __, ___) => _ArtworkFallback(isAudiobook: isAudiobook),
-                                )
-                              : _ArtworkFallback(isAudiobook: isAudiobook),
                         ),
                       ),
                     ),
                   ),
                 ),
-                const SizedBox(height: 30),
+                SizedBox(height: sectionGap),
                 Text(
                   title,
                   textAlign: TextAlign.center,
@@ -685,7 +743,7 @@ class _HomePage extends StatelessWidget {
                         fontWeight: FontWeight.w700,
                       ),
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: 4),
                 Text(
                   subtitle,
                   textAlign: TextAlign.center,
@@ -695,7 +753,7 @@ class _HomePage extends StatelessWidget {
                         color: scheme.onSurfaceVariant,
                       ),
                 ),
-                const SizedBox(height: 10),
+                const SizedBox(height: 4),
                 Center(
                   child: Chip(
                     avatar: Icon(
@@ -706,7 +764,7 @@ class _HomePage extends StatelessWidget {
                     visualDensity: VisualDensity.compact,
                   ),
                 ),
-                const SizedBox(height: 20),
+                SizedBox(height: compact ? 4 : 8),
                 _SeekSlider(
                   position: position,
                   duration: duration,
@@ -728,7 +786,7 @@ class _HomePage extends StatelessWidget {
                     style: Theme.of(context).textTheme.labelMedium,
                   ),
                 ],
-                const SizedBox(height: 18),
+                SizedBox(height: compact ? 4 : 8),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                   children: [
@@ -738,13 +796,19 @@ class _HomePage extends StatelessWidget {
                       onPressed: selectedDevice == null || busy ? null : onPrevious,
                       icon: const Icon(Icons.skip_previous_rounded),
                     ),
+                    IconButton(
+                      tooltip: '停止',
+                      iconSize: 30,
+                      onPressed: selectedDevice == null || busy ? null : onStop,
+                      icon: const Icon(Icons.stop_rounded),
+                    ),
                     SizedBox(
-                      width: 76,
-                      height: 76,
+                      width: compact ? 58 : 64,
+                      height: compact ? 58 : 64,
                       child: IconButton.filled(
                         tooltip: status?.state == 'playing' ? '暂停' : '播放',
                         onPressed: selectedDevice == null || busy ? null : onToggle,
-                        iconSize: 42,
+                        iconSize: 34,
                         icon: Icon(
                           status?.state == 'playing'
                               ? Icons.pause_rounded
@@ -760,7 +824,7 @@ class _HomePage extends StatelessWidget {
                     ),
                   ],
                 ),
-                const SizedBox(height: 16),
+                SizedBox(height: compact ? 4 : 8),
                 if (status?.volume != null)
                   Row(
                     children: [
@@ -778,7 +842,7 @@ class _HomePage extends StatelessWidget {
                       Text('${status!.volume}%'),
                     ],
                   ),
-                const SizedBox(height: 6),
+                const SizedBox(height: 0),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                   children: [
@@ -823,6 +887,8 @@ class _HomePage extends StatelessWidget {
             ),
           ),
         ),
+          );
+        },
       ),
     );
   }
@@ -938,7 +1004,11 @@ class _LibraryPage extends StatefulWidget {
   final SongloftApi api;
   final SpeakerDevice? device;
   final VoidCallback onPlayed;
-  final Future<void> Function(MediaItem song) onPlayLocal;
+  final Future<void> Function(
+    MediaItem song, {
+    List<MediaItem> queue,
+    int index,
+  }) onPlayLocal;
   final VoidCallback onOpenAudiobook;
   final VoidCallback? onOpenDirectUrl;
 
@@ -995,7 +1065,7 @@ class _LibraryPageState extends State<_LibraryPage> {
     setState(() => _busy = true);
     try {
       if (device.isLocal) {
-        await widget.onPlayLocal(song);
+        await widget.onPlayLocal(song, queue: _songs, index: index);
       } else {
         await widget.api.playPlaylist(
           device,
